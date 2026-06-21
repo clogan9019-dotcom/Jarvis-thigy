@@ -16,7 +16,6 @@ OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "llava:latest")
 # Import tools
 from tools import screen_vision, computer_control, file_terminal, web_search, memory_rag, deep_research as dr_module
 
-# Tool definitions (will be used to parse Ollama responses)
 TOOLS = {
     "screen_capture": screen_vision.screen_capture,
     "analyze_screen": screen_vision.analyze_screen,
@@ -33,72 +32,69 @@ TOOLS = {
     "deep_research": dr_module.deep_research,
 }
 
-# Tool descriptions for Ollama prompt
 TOOL_DESCRIPTIONS = """
-You have access to these tools (use them when needed):
+You have access to these tools. To use one, output EXACTLY this format on its own line:
+[TOOL: tool_name] {"arg": "value"}
 
-1. analyze_screen - Take a screenshot and describe what's on screen
-   Input: question (optional string)
-   
-2. web_search - Search the web for information
-   Input: query (string)
-   
-3. deep_research - Autonomous deep research on a topic
-   Input: topic (string), max_queries (optional, 5-20)
-   This takes 20-60 seconds and produces a full research report saved to ~/Jarvis/Projects/
-   
-4. open_app - Open a Windows application by name
-   Input: app_name (string, e.g., "notepad", "chrome", "vscode")
-   
-5. run_cmd - Run a Windows shell command
-   Input: command (string)
-   
+Available tools:
+
+1. analyze_screen - Screenshot and describe what's on screen
+   [TOOL: analyze_screen] {}
+
+2. web_search - Search the web
+   [TOOL: web_search] {"query": "your search query"}
+
+3. deep_research - Autonomous deep research (20-60 seconds, saves full report)
+   [TOOL: deep_research] {"topic": "research topic", "max_queries": 10}
+
+4. open_app - Open a Windows application
+   [TOOL: open_app] {"app_name": "notepad"}
+
+5. run_cmd - Run a shell command
+   [TOOL: run_cmd] {"command": "dir"}
+
 6. read_file - Read a text file
-   Input: path (string)
-   
-7. write_file - Write text to a file
-   Input: path (string), content (string)
-   
-8. memory_add - Save a fact to long-term memory
-   Input: text (string)
-   
-9. memory_search - Search long-term memory
-   Input: query (string)
-   
-10. click - Click on screen coordinates
-    Input: x (int), y (int)
+   [TOOL: read_file] {"path": "C:/path/to/file.txt"}
 
-When the user asks to research, study, or learn about something, use deep_research.
-When they ask "what's on my screen", use analyze_screen.
-When they mention something about themselves, use memory_add to save it.
+7. write_file - Write text to a file
+   [TOOL: write_file] {"path": "C:/path/file.txt", "content": "text"}
+
+8. memory_add - Save a fact to long-term memory
+   [TOOL: memory_add] {"text": "fact to remember"}
+
+9. memory_search - Search long-term memory
+   [TOOL: memory_search] {"query": "what to look for"}
+
+10. click - Click screen coordinates
+    [TOOL: click] {"x": 100, "y": 200}
+
+IMPORTANT: When the user asks to research, investigate, or study any topic, use deep_research.
+When asked about the screen, use analyze_screen.
+Always save important user facts with memory_add.
 """
 
-SYSTEM_PROMPT = f"""You are J.A.R.V.I.S., Tony Stark's AI assistant. You are helpful, concise, slightly witty, and very capable.
-
-You run on a Windows desktop and have access to various tools to help the user.
+SYSTEM_PROMPT = f"""You are J.A.R.V.I.S., Tony Stark's AI assistant. Helpful, concise, slightly witty, very capable.
 
 {TOOL_DESCRIPTIONS}
 
 Guidelines:
 - Be conversational but concise
 - Use tools when you need real information or to take actions
-- For research/study requests, use deep_research - it's very powerful
-- For screen questions, use analyze_screen
-- Remember important facts about the user with memory_add
-- When using tools, execute them and report results
-- Format code or technical info with backticks
+- For research requests, ALWAYS use deep_research — it's powerful and saves a full report
+- Output the [TOOL: ...] line exactly as shown, then continue your response
+- Format code with backticks
 
 Current OS: Windows
 Time: {time.strftime('%I:%M %p')}
 """
+
 
 class JarvisAgent:
     def __init__(self):
         self.history: List[Dict[str,str]] = []
         self.ollama_host = OLLAMA_HOST
         self.model = OLLAMA_MODEL
-        
-        # Check if Ollama is available
+
         try:
             import httpx
             response = httpx.get(f"{self.ollama_host}/api/tags", timeout=5)
@@ -109,10 +105,8 @@ class JarvisAgent:
         except Exception as e:
             print(f"[JARVIS] Warning: Ollama not responding: {e}")
             print(f"  → Start Ollama: ollama serve")
-            print(f"  → Or change OLLAMA_HOST in .env")
 
     async def chat(self, user_msg: str) -> Dict[str, Any]:
-        """Non-streaming chat (fallback)"""
         out = ""
         async for chunk in self.stream_chat(user_msg):
             if chunk.get("type") == "delta":
@@ -121,81 +115,82 @@ class JarvisAgent:
 
     async def stream_chat(self, user_msg: str) -> AsyncGenerator[Dict[str,Any], None]:
         """Main streaming chat with tool calling via Ollama"""
-        
+
         # Memory recall
         try:
             mem = memory_rag.memory_search(user_msg, k=3)
             mem_ctx = "\n".join([m["text"] for m in mem]) if mem else ""
         except Exception:
             mem_ctx = ""
-        
-        # Build messages
+
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         if mem_ctx:
             messages.append({"role": "system", "content": f"\n\nRelevant memory:\n{mem_ctx}"})
-        messages += self.history[-10:]  # Keep last 10 messages for context
+        messages += self.history[-10:]
         messages.append({"role": "user", "content": user_msg})
-        
+
         # Tool call loop (max 3 rounds)
         for round_idx in range(3):
             full_response = ""
-            tool_calls = []
-            
+
             try:
                 async for chunk in self._stream_ollama(messages):
                     if chunk.get("type") == "delta":
-                        text = chunk["text"]
-                        full_response += text
+                        full_response += chunk["text"]
                         yield chunk
-                        
-                        # Detect tool calls in the text
-                        detected = self._parse_tool_calls(text)
-                        for tc in detected:
-                            if tc not in tool_calls:
-                                tool_calls.append(tc)
-                                
                     elif chunk.get("type") == "done":
                         break
-                        
             except Exception as e:
                 yield {"type": "delta", "text": f"[Ollama error: {e}]"}
                 yield {"type": "done"}
                 return
-            
-            # Execute tool calls
+
+            # Parse tool calls from the FULL accumulated response (not per-chunk)
+            tool_calls = self._parse_tool_calls(full_response)
+
             if tool_calls:
                 messages.append({"role": "assistant", "content": full_response})
-                
+
                 for tool_call in tool_calls:
                     name = tool_call.get("name")
                     args = tool_call.get("args", {})
-                    
+
                     yield {"type": "tool", "name": name, "args": args}
-                    
+
                     try:
                         fn = TOOLS.get(name)
                         if fn:
-                            # Special handling for deep_research - stream progress
                             if name == "deep_research":
                                 import threading
-                                progress_state = {"queries": 0, "sources": 0, "progress": 0, "current_query": "", "done": False}
+                                progress_state = {
+                                    "queries": 0, "sources": 0,
+                                    "progress": 0, "current_query": ""
+                                }
                                 result_holder = {}
-                                
+
                                 def progress_cb(queries, sources, progress, current_query):
-                                    progress_state.update({"queries": queries, "sources": sources, "progress": progress, "current_query": current_query})
-                                
+                                    progress_state.update({
+                                        "queries": queries,
+                                        "sources": sources,
+                                        "progress": progress,
+                                        "current_query": current_query
+                                    })
+
                                 def run():
                                     try:
-                                        result_holder["result"] = fn(progress_callback=progress_cb, **args)
+                                        result_holder["result"] = fn(
+                                            progress_callback=progress_cb, **args
+                                        )
                                     except Exception as e:
                                         result_holder["error"] = str(e)
-                                    progress_state["done"] = True
-                                
+
                                 thread = threading.Thread(target=run, daemon=True)
                                 thread.start()
                                 last_q = -1
-                                
+
+                                # Use asyncio.sleep so we don't block the event loop
                                 while thread.is_alive():
+                                    await asyncio.sleep(0.15)
                                     if progress_state["queries"] != last_q:
                                         last_q = progress_state["queries"]
                                         yield {
@@ -206,106 +201,112 @@ class JarvisAgent:
                                             "progress": progress_state["progress"],
                                             "current_query": progress_state["current_query"]
                                         }
-                                    time.sleep(0.15)
-                                
+
                                 thread.join()
-                                
+
                                 if "error" in result_holder:
                                     raise RuntimeError(result_holder["error"])
                                 result = result_holder.get("result", {})
                             else:
                                 result = fn(**args) if args else fn()
-                            
+
                             result_str = json.dumps(result, default=str)[:4000]
                         else:
                             result_str = f"Unknown tool: {name}"
                             result = {"ok": False}
-                            
+
                     except Exception as e:
                         result_str = f"Error: {e}"
                         result = {"ok": False, "error": str(e)}
-                    
+
                     messages.append({"role": "tool", "content": result_str})
-                
-                # Continue conversation after tool results
+
                 continue
             else:
-                # No tool calls, conversation is done
                 break
-        
-        # Save to history
+
         self.history.append({"role": "user", "content": user_msg})
         self.history.append({"role": "assistant", "content": full_response})
-        
+
         yield {"type": "done", "text": full_response}
 
     def _parse_tool_calls(self, text: str) -> List[Dict]:
-        """Parse potential tool calls from Ollama response text"""
+        """
+        Parse tool calls from the full Ollama response text.
+        Matches [TOOL: name] {json} patterns, then falls back to keyword intent.
+        """
         tool_calls = []
-        
-        # Look for patterns like:
-        # [TOOL: analyze_screen] {"question": "..."}
-        # Tool: analyze_screen
-        # I'll use analyze_screen to...
-        
-        # Pattern 1: [TOOL: name] json
-        tool_pattern = r'\[TOOL:\s*(\w+)\]\s*(\{[^}]+\}|\S+)?'
-        matches = re.findall(tool_pattern, text, re.IGNORECASE)
-        for name, args_str in matches:
+        seen = set()
+
+        def add(name, args):
+            key = name
+            if key not in seen:
+                seen.add(key)
+                tool_calls.append({"name": name, "args": args})
+
+        # Pattern 1: explicit [TOOL: name] {json}
+        tool_pattern = r'\[TOOL:\s*(\w+)\]\s*(\{[^}]*\})?'
+        for name, args_str in re.findall(tool_pattern, text, re.IGNORECASE):
+            name = name.lower()
             if name in TOOLS:
                 try:
                     args = json.loads(args_str) if args_str and args_str.strip() else {}
-                except:
+                except Exception:
                     args = {}
-                tool_calls.append({"name": name, "args": args})
-        
-        # Pattern 2: Detect intent from text
+                add(name, args)
+
+        # Pattern 2: deep_research intent keywords
         text_lower = text.lower()
-        
-        # Screen analysis
+
+        deep_research_kws = [
+            "deep_research", "deep research", "researching", "research on",
+            "research about", "investigate", "look into", "study on"
+        ]
+        if any(kw in text_lower for kw in deep_research_kws):
+            if "deep_research" not in seen:
+                # Try to extract the topic from the user message context
+                topic_match = re.search(
+                    r'(?:research(?:ing)?|investigate|study)\s+(?:on\s+|about\s+)?["\']?([^"\'\n]{3,60})',
+                    text_lower
+                )
+                topic = topic_match.group(1).strip() if topic_match else ""
+                add("deep_research", {"topic": topic} if topic else {})
+
+        # Pattern 3: analyze_screen intent
         if any(kw in text_lower for kw in ["analyze screen", "what's on my screen", "what am i looking", "screenshot"]):
-            if "analyze_screen" not in [t["name"] for t in tool_calls]:
-                tool_calls.append({"name": "analyze_screen", "args": {}})
-        
-        # Web search
-        search_patterns = [
+            add("analyze_screen", {})
+
+        # Pattern 4: web_search intent
+        for pattern in [
             r'search(?:ing)? for ["\']([^"\']+)["\']',
             r'look(?:ing)? up ["\']([^"\']+)["\']',
             r'web search ["\']([^"\']+)["\']'
-        ]
-        for pattern in search_patterns:
-            match = re.search(pattern, text_lower)
-            if match and "web_search" not in [t["name"] for t in tool_calls]:
-                tool_calls.append({"name": "web_search", "args": {"query": match.group(1)}})
-        
+        ]:
+            m = re.search(pattern, text_lower)
+            if m:
+                add("web_search", {"query": m.group(1)})
+                break
+
         return tool_calls
 
     async def _stream_ollama(self, messages: List[Dict]) -> AsyncGenerator[Dict[str,Any], None]:
-        """Stream from Ollama"""
         import httpx
-        
-        # Convert messages format for Ollama
-        ollama_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                ollama_messages.append({"role": "system", "content": msg["content"]})
-            else:
-                ollama_messages.append({"role": msg["role"], "content": msg["content"]})
-        
-        # Build prompt with tool instructions
+
         prompt_parts = []
-        for msg in ollama_messages:
-            if msg["role"] == "system":
-                prompt_parts.append(f"System: {msg['content']}")
-            elif msg["role"] == "user":
-                prompt_parts.append(f"User: {msg['content']}")
-            elif msg["role"] == "assistant":
-                prompt_parts.append(f"Assistant: {msg['content']}")
-            elif msg["role"] == "tool":
-                prompt_parts.append(f"Tool result: {msg['content']}")
-        
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                prompt_parts.append(f"System: {content}")
+            elif role == "user":
+                prompt_parts.append(f"User: {content}")
+            elif role == "assistant":
+                prompt_parts.append(f"Assistant: {content}")
+            elif role == "tool":
+                prompt_parts.append(f"Tool result: {content}")
+
         prompt = "\n".join(prompt_parts) + "\nAssistant:"
-        
+
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -316,7 +317,7 @@ class JarvisAgent:
                 "repeat_penalty": 1.1,
             }
         }
-        
+
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 async with client.stream("POST", f"{self.ollama_host}/api/generate", json=payload) as response:
@@ -330,17 +331,14 @@ class JarvisAgent:
                                 yield {"type": "delta", "text": text}
                             if j.get("done"):
                                 break
-                        except:
+                        except Exception:
                             pass
         except Exception as e:
             yield {"type": "delta", "text": f"\n\n[Error: Ollama not responding - {e}]"}
             yield {"type": "delta", "text": "\n\n💡 Make sure Ollama is running: `ollama serve`"}
 
 
-# Alias for backward compatibility
 def chat_with_jarvis(message: str) -> str:
-    """Synchronous wrapper for simple usage"""
     agent = JarvisAgent()
-    import asyncio
     result = asyncio.run(agent.chat(message))
     return result.get("reply", "")
