@@ -6,11 +6,13 @@ FastAPI server with WebSocket support
 import asyncio
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -28,6 +30,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# Serve TTS audio files so the frontend can play them via HTTP
+_tts_dir = Path(tempfile.gettempdir()) / "jarvis_tts"
+_tts_dir.mkdir(exist_ok=True)
+app.mount("/audio", StaticFiles(directory=str(_tts_dir)), name="audio")
 
 agent = JarvisAgent()
 
@@ -208,6 +215,77 @@ async def memory_add(text: str = ""):
     from tools.memory_rag import memory_add
     result = memory_add(text)
     return result
+
+# ============ GREETING ============
+@app.get("/greeting")
+async def greeting():
+    """Generate a personalised JARVIS greeting using long-term memory + Ollama."""
+    from datetime import datetime
+    from tools.memory_rag import memory_search as search
+
+    hour = datetime.now().hour
+    if hour < 5:
+        period = "the early hours"
+    elif hour < 12:
+        period = "morning"
+    elif hour < 17:
+        period = "afternoon"
+    elif hour < 21:
+        period = "evening"
+    else:
+        period = "night"
+
+    # Pull the most relevant user facts from memory
+    memories = search("user name preferences habits projects work", k=12)
+    mem_lines = [m["text"] for m in memories if m.get("text")]
+
+    if mem_lines:
+        mem_block = "\n".join(f"- {l}" for l in mem_lines)
+    else:
+        mem_block = "(no memories stored yet — this may be the first session)"
+
+    prompt = f"""You are J.A.R.V.I.S., Tony Stark's AI assistant.
+Generate a single, personalised greeting for the user. It is currently {period}.
+
+Facts you know about the user from memory:
+{mem_block}
+
+Rules:
+- Exactly 1–2 sentences. No more.
+- Do NOT start with "Good {period}" — be creative.
+- Reference something personal if memory has it (name, recent project, preference).
+- Slightly formal, witty, and warm — classic JARVIS tone.
+- End by subtly offering your assistance.
+- Output ONLY the greeting text, nothing else."""
+
+    # Ask Ollama
+    import httpx
+    host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    greeting_text = ""
+    try:
+        resp = httpx.post(
+            f"{host}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False,
+                  "options": {"temperature": 0.7, "num_predict": 80}},
+            timeout=20
+        )
+        greeting_text = resp.json().get("response", "").strip()
+    except Exception as e:
+        print(f"[Greeting] Ollama error: {e}")
+
+    # Fallback greetings when Ollama is unavailable or returns nothing
+    if not greeting_text:
+        fallbacks = {
+            "the early hours": "Running diagnostics at this ungodly hour, I see. All systems are online and ready for your instructions.",
+            "morning":   "Neural interface online. Systems nominal — whenever you're ready, I'm at your disposal.",
+            "afternoon": "All systems nominal. A productive afternoon awaits — what shall we tackle first?",
+            "evening":   "Evening protocols engaged. Systems are running smoothly — I'm here whenever you need me.",
+            "night":     "Burning the midnight oil again? All systems are online. Let's make it count.",
+        }
+        greeting_text = fallbacks.get(period, "Neural interface online. Always at your service.")
+
+    return {"ok": True, "greeting": greeting_text, "period": period, "memories": len(mem_lines)}
 
 # ============ MAIN ============
 if __name__ == "__main__":
