@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 
 const BACKEND = 'http://127.0.0.1:8765'
 
@@ -32,7 +32,6 @@ function useParticleSphere(canvasRef, speaking, listening, audioLevel) {
       const cx = W/2, cy = H/2
       const baseR = Math.min(W, H) * 0.28
 
-      // subtle glow halo
       const grd = ctx.createRadialGradient(cx, cy, baseR*0.4, cx, cy, baseR*1.6)
       grd.addColorStop(0, 'rgba(0,230,255,0.035)')
       grd.addColorStop(1, 'rgba(0,230,255,0)')
@@ -49,7 +48,6 @@ function useParticleSphere(canvasRef, speaking, listening, audioLevel) {
         const wob = Math.sin(t * 1.7 + p.wob) * (0.035 + speakBoost * 0.6)
         const r = baseR * (1 + wob + listenBoost)
 
-        // 3D sphere to 2D
         const x = Math.sin(p.phi) * Math.cos(p.theta)
         const y = Math.sin(p.phi) * Math.sin(p.theta)
         const z = Math.cos(p.phi)
@@ -63,7 +61,7 @@ function useParticleSphere(canvasRef, speaking, listening, audioLevel) {
         const px = cx + rx * r * scale
         const py = cy + ry * r * scale
 
-        const depth = (rz + 1) * 0.5 // 0..1
+        const depth = (rz + 1) * 0.5
         const size = (0.9 + depth * 1.9) * window.devicePixelRatio
         const alpha = 0.35 + depth * 0.75 + speakBoost
 
@@ -98,7 +96,6 @@ export default function App() {
   const [showHud, setShowHud] = useState(true)
   const [showDock, setShowDock] = useState(true)
 
-  // Research agent state – this is the cool Manina Labs feature
   const [research, setResearch] = useState({
     active: false,
     topic: '',
@@ -110,17 +107,18 @@ export default function App() {
   })
 
   const wsRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const isRecordingRef = useRef(false)
 
   useParticleSphere(canvasRef, speaking, listening, audioLevel)
 
-  // fake audio level pulsing when speaking
   useEffect(() => {
     if (!speaking) { setAudioLevel(0.12); return }
     const id = setInterval(() => setAudioLevel(0.18 + Math.random()*0.45), 80)
     return () => clearInterval(id)
   }, [speaking])
-  
-  // Fetch backend status on mount
+
   useEffect(() => {
     fetch(BACKEND + '/health')
       .then(r => r.json())
@@ -135,7 +133,19 @@ export default function App() {
       })
   }, [])
 
-  // WebSocket to backend
+  /* ---------- Play TTS audio from backend path ---------- */
+  const playTtsAudio = useCallback((filePath) => {
+    try {
+      const filename = filePath.replace(/\\/g, '/').split('/').pop()
+      const url = `${BACKEND}/audio/${filename}`
+      const audio = new Audio(url)
+      audio.play().catch(e => console.warn('[TTS] Audio play failed:', e))
+    } catch (e) {
+      console.warn('[TTS] playTtsAudio error:', e)
+    }
+  }, [])
+
+  /* ---------- WebSocket ---------- */
   useEffect(() => {
     const connect = () => {
       try {
@@ -145,7 +155,6 @@ export default function App() {
           const d = JSON.parse(e.data)
           if (d.type === 'delta') {
             setSpeaking(true)
-            // glowing word captions - extract last word
             const words = d.text.trim().split(/\s+/)
             const last = words[words.length-1]?.replace(/[^A-Za-z0-9]/g,'').toUpperCase()
             if (last && last.length > 1 && last.length < 16) {
@@ -162,6 +171,11 @@ export default function App() {
               }
               return copy
             })
+          } else if (d.type === 'tts_start') {
+            // backend is about to send audio
+          } else if (d.type === 'tts') {
+            // Play the generated audio file served via HTTP
+            if (d.path) playTtsAudio(d.path)
           } else if (d.type === 'tool') {
             const isDeepResearch = d.name === 'deep_research'
             setResearch(r => ({
@@ -174,7 +188,6 @@ export default function App() {
               current_query: d.args?.topic || d.args?.query || ''
             }))
           } else if (d.type === 'research_progress') {
-            // Live Deep Research progress – Manina Labs HUD
             setResearch({
               active: true,
               topic: d.topic || 'deep research',
@@ -197,12 +210,11 @@ export default function App() {
     }
     connect()
     return () => wsRef.current?.close()
-  }, [])
+  }, [playTtsAudio])
 
   const send = (text) => {
     if (!text.trim()) return
     setMsgs(m => [...m, { who: 'YOU', text }])
-    // research HUD will activate when the backend actually calls deep_research / web_search
     setSpeaking(false)
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'chat', text }))
@@ -215,19 +227,86 @@ export default function App() {
     }
   }
 
-  // Keys: Space PTT, Tab toggle HUD, ` toggle dock, Esc interrupt
+  /* ---------- Push-to-Talk (Space) microphone recording ---------- */
+  const startRecording = useCallback(async () => {
+    if (isRecordingRef.current) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioChunksRef.current = []
+      const recorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        if (blob.size < 1000) return // too short, ignore
+
+        setMsgs(m => [...m, { who: 'JARVIS', text: '🎙️ Transcribing…', streaming: true }])
+
+        try {
+          const formData = new FormData()
+          formData.append('file', blob, 'recording.webm')
+          const res = await fetch(BACKEND + '/transcribe', { method: 'POST', body: formData })
+          const data = await res.json()
+
+          // Remove the "Transcribing…" placeholder
+          setMsgs(m => m.filter(x => x.text !== '🎙️ Transcribing…'))
+
+          if (data.ok && data.text?.trim()) {
+            send(data.text.trim())
+          } else {
+            setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ STT failed: ${data.error || 'No speech detected'}` }])
+          }
+        } catch (err) {
+          setMsgs(m => m.filter(x => x.text !== '🎙️ Transcribing…'))
+          setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ Transcription error: ${err.message}` }])
+        }
+      }
+
+      recorder.start()
+      isRecordingRef.current = true
+      setListening(true)
+    } catch (err) {
+      console.error('[PTT] Mic error:', err)
+      setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Microphone access denied. Check browser permissions.' }])
+    }
+  }, [])
+
+  const stopRecording = useCallback(() => {
+    if (!isRecordingRef.current) return
+    isRecordingRef.current = false
+    setListening(false)
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+  }, [])
+
+  /* ---------- Keys ---------- */
   useEffect(() => {
     const down = (e) => {
-      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); setListening(true) }
+      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+        e.preventDefault()
+        startRecording()
+      }
       if (e.code === 'Tab') { e.preventDefault(); setShowHud(h => !h) }
       if (e.code === 'Backquote') { setShowDock(d => !d) }
-      if (e.code === 'Escape') { setSpeaking(false); setListening(false); wsRef.current?.send(JSON.stringify({type:'interrupt'})) }
+      if (e.code === 'Escape') {
+        setSpeaking(false)
+        stopRecording()
+        wsRef.current?.send(JSON.stringify({type:'interrupt'}))
+      }
     }
-    const up = (e) => { if (e.code === 'Space') setListening(false) }
+    const up = (e) => {
+      if (e.code === 'Space') stopRecording()
+    }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
-  }, [])
+  }, [startRecording, stopRecording])
 
   const lastMsgs = msgs.slice(-3)
 
@@ -254,7 +333,6 @@ export default function App() {
           <div className="speak-word">{speakWord}</div>
         </div>
 
-        {/* Deep Research HUD – the viral Manina Labs feature */}
         <div className={`side-hud ${showHud ? '' : 'hidden'}`} style={{right:'34px'}}>
           {research.active && (
             <div className="hud-card" style={{borderColor:'rgba(0,229,255,0.32)'}}>
@@ -272,14 +350,13 @@ export default function App() {
           <div className="hud-card">
             <h4>System</h4>
             <div className="tool-row"><span>STT</span><span>Whisper</span></div>
-            <div className="tool-row"><span>LLM</span><span>GPT-4o</span></div>
-            <div className="tool-row"><span>TTS</span><span>ElevenLabs</span></div>
+            <div className="tool-row"><span>LLM</span><span>Ollama</span></div>
+            <div className="tool-row"><span>TTS</span><span>SAPI</span></div>
             <div className="tool-row"><span>MEM</span><span>ChromaDB</span></div>
             <div className="tool-row"><span>MODE</span><span style={{color: listening ? '#00e5ff' : speaking ? '#ffca5f' : '#4a8a99'}}>{listening ? 'LISTEN' : speaking ? 'SPEAK' : 'IDLE'}</span></div>
           </div>
         </div>
 
-        {/* Bottom transcript – mono teal */}
         <div className="transcript-bar" style={{opacity: showHud ? 1 : 0.35}}>
           {lastMsgs.map((m,i)=>(
             <div key={i} className="line"><span className={`who ${m.who==='YOU'?'you':''}`}>{m.who==='YOU'?'YOU >':'JARVIS >'}</span>{m.text}</div>
@@ -290,7 +367,6 @@ export default function App() {
           <kbd>Space</kbd> talk &nbsp; <kbd>Esc</kbd> interrupt &nbsp; <kbd>Tab</kbd> HUD &nbsp; <kbd>`</kbd> dock
         </div>
 
-        {/* Input dock */}
         <div className={`dock ${showDock ? '' : 'hidden-dock'}`}>
           <input
             value={input}
