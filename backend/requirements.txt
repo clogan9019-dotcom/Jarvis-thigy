@@ -30,7 +30,7 @@ numpy==1.26.4
 pywin32==306; sys_platform == "win32"
 
 # ============ Memory (Local ChromaDB) ============
-chromadb==0.5.8
+chromadb==0.5.23
 sentence-transformers==3.1.1
 
 # ============ Screen/Vision (Local) ============
