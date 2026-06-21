@@ -1,17 +1,18 @@
 import os
 import re
 import uuid
+import asyncio
 import tempfile
 import subprocess
 from pathlib import Path
 
 
 def _apply_jarvis_effect(wav_path: str) -> str:
-    """Post-process WAV: reverb + high-freq boost for the JARVIS metallic sound."""
+    """Post-process WAV: metallic high-freq boost + reverb for the JARVIS sound."""
     try:
         import numpy as np
         from scipy.io import wavfile
-        from scipy.signal import lfilter
+        from scipy.signal import lfilter, butter, sosfilt
 
         rate, data = wavfile.read(wav_path)
 
@@ -24,22 +25,27 @@ def _apply_jarvis_effect(wav_path: str) -> str:
 
         mono = samples if samples.ndim == 1 else samples[:, 0]
 
-        # High-frequency crisp/digital edge
-        b_shelf = np.array([1.3, -0.3])
+        # Strong high-frequency metallic/digital edge
+        b_shelf = np.array([1.5, -0.5])
         mono = lfilter(b_shelf, [1.0], mono)
 
-        # Short room echo
-        d1 = int(rate * 0.038)
+        # Subtle high-pass to remove muddiness
+        sos = butter(2, 120.0 / (rate / 2), btype='high', output='sos')
+        mono = sosfilt(sos, mono)
+
+        # Short room echo — gives the suit-speaker feel
+        d1 = int(rate * 0.032)
         rev = np.zeros_like(mono)
-        rev[d1:] = mono[:-d1] * 0.22
+        rev[d1:] = mono[:-d1] * 0.18
         mono = mono + rev
 
-        # Softer second echo for depth
-        d2 = int(rate * 0.072)
+        # Second softer echo for depth
+        d2 = int(rate * 0.065)
         rev2 = np.zeros_like(mono)
-        rev2[d2:] = mono[:-d2] * 0.10
+        rev2[d2:] = mono[:-d2] * 0.08
         mono = mono + rev2
 
+        # Normalize
         peak = np.max(np.abs(mono))
         if peak > 0:
             mono = mono / peak * 0.92
@@ -53,9 +59,25 @@ def _apply_jarvis_effect(wav_path: str) -> str:
 
 def _escape_ps(text: str) -> str:
     """Escape text for safe embedding in a PowerShell string."""
-    # Remove characters that break PS string literals
     text = text.replace("'", "").replace('"', "").replace("`", "").replace("\n", " ")
-    return text[:800]  # cap length to avoid CLI arg limits
+    return text[:800]
+
+
+async def _edge_tts_async(text: str, out_path: str) -> bool:
+    """Use Microsoft Edge neural TTS — en-GB-RyanNeural is a deep British male voice."""
+    try:
+        import edge_tts
+        communicate = edge_tts.Communicate(
+            text,
+            voice="en-GB-RyanNeural",
+            rate="-8%",
+            pitch="-12Hz",
+        )
+        await communicate.save(out_path)
+        return Path(out_path).exists() and Path(out_path).stat().st_size > 0
+    except Exception as e:
+        print(f"[TTS] edge-tts failed: {e}")
+        return False
 
 
 def tts_to_file(text: str) -> str | None:
@@ -63,9 +85,10 @@ def tts_to_file(text: str) -> str | None:
     Convert text to speech. Returns path to audio file.
     Priority:
       1. ElevenLabs (if ELEVENLABS_API_KEY set)
-      2. Windows SAPI via PowerShell (no extra deps, always works on Windows)
-      3. Windows SAPI via pywin32 (fallback if PS fails)
-      4. pyttsx3
+      2. Edge TTS - en-GB-RyanNeural (free Microsoft neural voice, JARVIS-like)
+      3. Windows SAPI via PowerShell (built-in fallback)
+      4. Windows SAPI via pywin32
+      5. pyttsx3
     """
     out_dir = Path(tempfile.gettempdir()) / "jarvis_tts"
     out_dir.mkdir(exist_ok=True)
@@ -89,7 +112,17 @@ def tts_to_file(text: str) -> str | None:
         except Exception as e:
             print(f"[TTS] ElevenLabs failed: {e}")
 
-    # ── 2. PowerShell SAPI (no Python deps needed) ───────────────────────────
+    # ── 2. Edge TTS (free neural voice — en-GB-RyanNeural) ──────────────────
+    try:
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
+        ok = asyncio.run(_edge_tts_async(text, str(out_path)))
+        if ok:
+            print(f"[TTS] Edge TTS (RyanNeural) → {out_path.name}")
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] Edge TTS error: {e}")
+
+    # ── 3. PowerShell SAPI (no Python deps needed) ───────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         safe_text = _escape_ps(text)
@@ -118,7 +151,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] PowerShell SAPI error: {e}")
 
-    # ── 3. win32com SAPI ─────────────────────────────────────────────────────
+    # ── 4. win32com SAPI ─────────────────────────────────────────────────────
     try:
         import win32com.client
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
@@ -135,7 +168,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] win32com SAPI failed: {e}")
 
-    # ── 4. pyttsx3 ───────────────────────────────────────────────────────────
+    # ── 5. pyttsx3 ───────────────────────────────────────────────────────────
     try:
         import pyttsx3
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
