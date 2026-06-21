@@ -1,29 +1,74 @@
+# ============================================
+# J.A.R.V.I.S Backend - LOCAL MODE REQUIREMENTS
+# No API keys needed! Everything runs locally.
+# ============================================
+
+# Core
 fastapi==0.115.0
 uvicorn==0.30.6
 websockets==13.0
 python-dotenv==1.0.1
 pydantic==2.9.2
 
-openai==1.51.0
-elevenlabs==1.11.0
+# ============ LLM (Local Ollama) ============
+# No OpenAI needed! Just install Ollama: ollama.com
+# Model: ollama pull qwen2.5-coder-14b-instruct-abliterated:latest
+httpx==0.27.2
 
+# ============ STT (Local Whisper) ============
+# For speech-to-text, no API needed
 faster-whisper==1.0.3
 sounddevice==0.5.1
 soundfile==0.12.1
 numpy==1.26.4
 
+# Optional GPU acceleration for Whisper:
+# pip install torch (for CUDA support)
+
+# ============ TTS (Local Windows SAPI) ============
+# Built into Windows, no setup needed
+pywin32==306; sys_platform == "win32"
+
+# ============ Memory (Local ChromaDB) ============
 chromadb==0.5.8
 sentence-transformers==3.1.1
 
+# ============ Screen/Vision (Local) ============
 mss==9.0.1
 pillow==10.4.0
+
+# ============ Computer Control ============
 pyautogui==0.9.54
 pygetwindow==0.0.9
 psutil==6.0.0
 
-httpx==0.27.2
-beautifulsoup4==4.12.3
+# ============ Web Search (Free, No Key) ============
 duckduckgo-search==6.3.4
+beautifulsoup4==4.12.3
 
-# Windows TTS fallback
-pywin32==306; sys_platform == "win32"
+# ============================================
+# OPTIONAL API KEYS (if you want cloud features)
+# ============================================
+# OPENAI_API_KEY=sk-...     # For GPT-4 (not needed for local)
+# ELEVENLABS_API_KEY=...    # For premium TTS (not needed, SAPI is free)
+# BRAVE_SEARCH_API_KEY=...  # For better search (not needed, DuckDuckGo is free)
+
+# ============================================
+# INSTALL ALL (Local Only):
+# ============================================
+# pip install -r requirements.txt
+#
+# Then start Ollama:
+#   ollama serve
+#   ollama pull qwen2.5-coder-14b-instruct-abliterated:latest
+#
+# Optional (for screen vision AI):
+#   ollama pull llava
+#
+# Optional (for better STT with GPU):
+#   pip install torch
+#   pip install faster-whisper[torch]
+#
+# Then run:
+#   python main.py
+# ============================================

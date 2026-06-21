@@ -1,110 +1,233 @@
-# J.A.R.V.I.S — Windows Desktop
+# J.A.R.V.I.S — Windows Desktop AI Assistant
 
-Iron Man-style AI assistant for Windows.
+**Iron Man-style AI assistant - 100% LOCAL, no API keys required!**
 
-**GUI:** Frameless Electron HUD — glowing cyan orb, HUD rings, live waveform, streaming transcript. Windows 11 Mica / acrylic.
-
-**Backend:** Python FastAPI
-- STT: faster-whisper (local)
-- LLM: OpenAI GPT-4o with function calling • Ollama fallback (qwen2.5 / llama3.1)
-- TTS: ElevenLabs • System SAPI fallback
-- Tools: screen_vision, computer_control, file_terminal, web_search, memory_rag
-- Memory: ChromaDB RAG, persistent
+<img src="https://img.shields.io/badge/LLM-Ollama-brightgreen" />
+<img src="https://img.shields.io/badge/STT-faster--whisper-blue" />
+<img src="https://img.shields.io/badge/TTS-Windows%20SAPI-green" />
+<img src="https://img.shields.io/badge/Search-DuckDuckGo-orange" />
 
 ---
 
-## Quick Start (dev)
+## 🎯 What is J.A.R.V.I.S?
 
-### 1. Backend
+A fully local AI desktop assistant inspired by Tony Stark's JARVIS. No cloud services, no API keys, your data stays on your machine.
+
+### GUI
+Frameless Electron HUD — glowing cyan orb, HUD rings, live waveform, streaming transcript. Windows 11 Mica / acrylic.
+
+### Backend
+Python FastAPI — **completely local**
+
+| Component | Local Solution |
+|-----------|----------------|
+| **LLM** | Ollama (qwen2.5-coder, llama3.2, etc.) |
+| **STT** | faster-whisper (local transcription) |
+| **TTS** | Windows SAPI (built into Windows) |
+| **Memory** | ChromaDB (local vector database) |
+| **Search** | DuckDuckGo (free, no API key) |
+| **Vision** | Ollama vision model (llava) |
+
+### Tools
+- 👁️ **screen_vision** - Screenshot + AI analysis
+- ⌨️ **computer_control** - Open apps, type, click, hotkeys
+- 📁 **file_terminal** - Read/write files, run commands
+- 🌐 **web_search** - DuckDuckGo (no key needed!)
+- 🔬 **deep_research** - Autonomous research agent
+- 💾 **memory_rag** - ChromaDB persistent memory
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install Ollama
+
+Download from https://ollama.com and install.
+
+Then pull your model:
+```powershell
+ollama pull qwen2.5-coder-14b-instruct-abliterated:latest
+```
+Or use any model you prefer:
+```powershell
+ollama pull llama3.2
+```
+
+Start Ollama (keep running):
+```powershell
+ollama serve
+```
+
+### 2. Backend Setup
+
 ```powershell
 cd backend
+
+# Create virtual environment
 python -m venv .venv
 .\.venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 
-# copy .env.example -> .env and add keys
+# Copy and configure
 copy .env.example .env
 
+# Run backend
 python main.py
-# -> http://127.0.0.1:8765
 ```
 
-`.env` keys (all optional, there are fallbacks):
+You should see:
 ```
-OPENAI_API_KEY=sk-...
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
-BRAVE_SEARCH_API_KEY=...
-JARVIS_LLM=openai   # or ollama
-OLLAMA_MODEL=qwen2.5:7b
+╔══════════════════════════════════════════════════════════╗
+║           J.A.R.V.I.S Backend - LOCAL MODE               ║
+╚══════════════════════════════════════════════════════════╝
+
+🚀 Starting at http://127.0.0.1:8765
+✅ Ollama for LLM
+✅ Windows SAPI for TTS
+✅ ChromaDB for memory
+✅ DuckDuckGo for web search
 ```
 
-No keys? It still runs: Ollama for LLM, system SAPI for TTS.
+### 3. Frontend Setup
 
-### 2. Frontend
 ```powershell
 cd app
 npm install
 npm run dev
 ```
+
 Electron window launches with Vite HMR.
 
 ---
 
-## Build JarvisSetup.exe
+## 📋 .env Configuration
 
-Locally:
+```env
+# OLLAMA (Required)
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5-coder-14b-instruct-abliterated:latest
+OLLAMA_VISION_MODEL=llava:latest
+
+# TTS (Optional - Windows SAPI works automatically)
+# ELEVENLABS_API_KEY=  # Not needed!
+
+# STT (Optional - faster-whisper runs locally)
+WHISPER_MODEL=base
+
+# Search (Optional - DuckDuckGo is free!)
+# BRAVE_SEARCH_API_KEY=  # Not needed!
+
+# Server
+JARVIS_PORT=8765
+JARVIS_HOST=127.0.0.1
+```
+
+---
+
+## 🎮 Features
+
+| Command | What it does |
+|---------|--------------|
+| `/ask <question>` | Chat with AI |
+| `analyze_screen` | Take screenshot and describe |
+| `deep_research` | Autonomous research on any topic |
+| `open_app <name>` | Open Windows application |
+| `memory_add <fact>` | Remember something |
+| `web_search <query>` | Search the web |
+| `run_cmd <command>` | Execute shell command |
+
+### Keyboard Shortcuts (in GUI)
+- **Space** - Push to talk
+- **Esc** - Interrupt
+- **Tab** - Toggle HUD
+- **`** - Toggle dock
+
+---
+
+## 🔧 Optional Enhancements
+
+### GPU Acceleration (for faster STT)
+```powershell
+pip install torch
+```
+
+### Screen Vision (AI analysis)
+```powershell
+ollama pull llava
+```
+
+### Larger Whisper Model
+```powershell
+# Better accuracy, slower
+WHISPER_MODEL=medium
+```
+
+---
+
+## 📦 Build Windows EXE
+
 ```powershell
 cd app
 npm run build:win
 # -> app/dist/JarvisSetup-0.1.0.exe
 ```
 
-Via GitHub Actions:
-1. Push this repo to https://github.com/clogan9019-dotcom/Jarvis-thigy
-2. Tag a release:
-   ```
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-3. Actions → "Build Windows EXE" runs, uploads `JarvisSetup.exe` to the Release.
-
-See `.github/workflows/build-windows.yml`
-
----
-
-## Repo push commands
-
-First time:
+Or via GitHub Actions:
 ```powershell
-cd jarvis-windows
-git init
-git add .
-git commit -m "Jarvis Windows v0.1"
-git branch -M main
-git remote add origin https://github.com/clogan9019-dotcom/Jarvis-thigy.git
-git push -u origin main
+git tag v0.1.0
+git push origin v0.1.0
 ```
-Authenticate with `gh auth login` or Git Credential Manager — do NOT paste a PAT in chat.
 
 ---
 
-## Features
+## ❓ Troubleshooting
 
-- Wake word "Hey Jarvis" + push-to-talk (Space)
-- Streaming LLM responses with function calling
-- Screen vision: "What's on my screen?"
-- Computer control: open apps, click/type
-- File / terminal tools
-- Web search (Brave API, fallback DuckDuckGo)
-- Long-term memory: ChromaDB RAG
-- Interruptible TTS (Esc)
-- System tray, always-on-top toggle
+### "Ollama not responding"
+```powershell
+ollama serve
+# Keep this running!
+```
 
-## Config
+### "STT not working"
+```powershell
+pip install faster-whisper sounddevice scipy
+```
 
-Settings are in `%APPDATA%/jarvis/config.json`, or edit `backend/.env`.
+### "TTS not working"
+Windows SAPI should work automatically. If not:
+```powershell
+pip install pywin32
+```
+
+### "Web search failing"
+```powershell
+pip install duckduckgo-search
+```
 
 ---
 
-MIT
+## 📁 Project Structure
+
+```
+Jarvis-thigy/
+├── app/                    # Electron + React frontend
+│   ├── electron/          # Main process
+│   └── src/               # React components
+├── backend/               # Python FastAPI backend
+│   ├── tools/             # Tool implementations
+│   ├── main.py            # API server
+│   ├── llm_agent.py       # Ollama agent
+│   ├── stt.py             # Whisper STT
+│   ├── tts.py             # Windows SAPI TTS
+│   └── requirements.txt   # Python dependencies
+├── README.md
+└── index.html
+```
+
+---
+
+**No API keys. No cloud. 100% local.**
+
+*MIT License*

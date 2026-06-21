@@ -119,6 +119,21 @@ export default function App() {
     const id = setInterval(() => setAudioLevel(0.18 + Math.random()*0.45), 80)
     return () => clearInterval(id)
   }, [speaking])
+  
+  // Fetch backend status on mount
+  useEffect(() => {
+    fetch(BACKEND + '/health')
+      .then(r => r.json())
+      .then(data => {
+        console.log('[JARVIS] Backend status:', data)
+        if (!data.ollama?.connected) {
+          setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Ollama not connected. Run: ollama serve' }])
+        }
+      })
+      .catch(() => {
+        setMsgs(m => [...m, { who: 'JARVIS', text: '❌ Backend offline. Run: python main.py in backend folder' }])
+      })
+  }, [])
 
   // WebSocket to backend
   useEffect(() => {
