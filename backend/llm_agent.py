@@ -132,18 +132,31 @@ class JarvisAgent:
         # Tool call loop (max 3 rounds)
         for round_idx in range(3):
             full_response = ""
+            line_buf = ""  # used to filter [TOOL: ...] lines before display
 
             try:
                 async for chunk in self._stream_ollama(messages):
                     if chunk.get("type") == "delta":
-                        full_response += chunk["text"]
-                        yield chunk
+                        text = chunk["text"]
+                        full_response += text
+                        line_buf += text
+
+                        # Flush complete lines — suppress any that are tool calls
+                        while "\n" in line_buf:
+                            line, line_buf = line_buf.split("\n", 1)
+                            if not re.search(r'\[TOOL:\s*\w+\]', line, re.IGNORECASE):
+                                yield {"type": "delta", "text": line + "\n"}
                     elif chunk.get("type") == "done":
                         break
             except Exception as e:
                 yield {"type": "delta", "text": f"[Ollama error: {e}]"}
                 yield {"type": "done"}
                 return
+
+            # Flush last partial line (no trailing newline) — suppress if tool call
+            if line_buf and not re.search(r'\[TOOL:\s*\w+\]', line_buf, re.IGNORECASE):
+                yield {"type": "delta", "text": line_buf}
+            line_buf = ""
 
             # Parse tool calls from the FULL accumulated response (not per-chunk)
             tool_calls = self._parse_tool_calls(full_response)
