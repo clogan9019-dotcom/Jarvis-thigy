@@ -14,7 +14,6 @@ def web_search(query: str) -> dict:
     Optional: Set BRAVE_SEARCH_API_KEY in .env for better results
     """
     
-    # Try Brave first (if API key provided)
     brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
     if brave_key:
         try:
@@ -40,12 +39,19 @@ def web_search(query: str) -> dict:
         except Exception as e:
             print(f"[WebSearch] Brave error: {e}")
     
-    # DuckDuckGo fallback (FREE, no key needed!)
     try:
         from duckduckgo_search import DDGS
         
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+            raw = list(ddgs.text(query, max_results=5))
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", r.get("url", "")),
+                    "desc": r.get("body", r.get("desc", ""))
+                }
+                for r in raw
+            ]
             return {"ok": True, "provider": "duckduckgo", "results": results}
             
     except ImportError:
