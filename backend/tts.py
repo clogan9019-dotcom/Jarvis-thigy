@@ -128,10 +128,17 @@ def tts_to_file(text: str) -> str | None:
         safe_text = _escape_ps(text)
         safe_out  = str(out_path).replace("\\", "\\\\")
 
+        # Try British male voices first (George = classic JARVIS accent)
+        # Falls back to David/Zira if no British voice is installed
         ps_script = (
             "Add-Type -AssemblyName System.Speech; "
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            "$s.Rate = -2; "
+            "$preferred = @('George','Ryan','James'); "
+            "foreach ($p in $preferred) { "
+            "    $v = ($s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Name -like \"*$p*\" } | Select-Object -First 1); "
+            "    if ($v) { $s.SelectVoice($v.VoiceInfo.Name); break } "
+            "}; "
+            "$s.Rate = -3; "
             f"$s.SetOutputToWaveFile('{safe_out}'); "
             f"$s.Speak('{safe_text}'); "
             "$s.Dispose()"
@@ -156,7 +163,12 @@ def tts_to_file(text: str) -> str | None:
         import win32com.client
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         speaker = win32com.client.Dispatch("SAPI.SpVoice")
-        speaker.Rate = -2
+        # Try British male voices
+        for voice in speaker.GetVoices():
+            if any(n in voice.GetDescription() for n in ('George', 'Ryan', 'James')):
+                speaker.Voice = voice
+                break
+        speaker.Rate = -3
         file_stream = win32com.client.Dispatch("SAPI.SpFileStream")
         file_stream.Open(str(out_path), 3)
         speaker.AudioOutputStream = file_stream
