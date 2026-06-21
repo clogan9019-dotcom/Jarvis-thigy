@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --cyan: #00e5ff;
+  --cyan-glow: rgba(0, 229, 255, 0.55);
+  --cyan-dim: rgba(0, 229, 255, 0.18);
+  --bg: #060b12;
+  --panel: rgba(12, 22, 34, 0.72);
+  --panel-border: rgba(0, 229, 255, 0.22);
+  --text: #d8f7ff;
+  --muted: #7aa7b8;
+  --red: #ff5c6e;
+  --amber: #ffca5f;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  background: radial-gradient(1200px 800px at 50% 45%, #0a1825 0%, #050b13 60%, #03060a 100%), var(--bg);
+  color: var(--text);
+  font-family: 'Space Grotesk', system-ui, Segoe UI, Roboto, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+/* Window chrome - for preview only, Electron version is frameless */
+.titlebar {
+  height: 36px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 16px;
+  background: rgba(6,14,22,0.7);
+  border-bottom:1px solid rgba(0,229,255,0.12);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--muted);
+  -webkit-app-region: drag;
+}
+.titlebar .traffic { display:flex; gap:8px; }
+.titlebar .dot { width:10px; height:10px; border-radius:50%; }
+.dot.r { background:#ff5f57; } .dot.y { background:#febc2e; } .dot.g { background:#28c840; }
+
+.wrap {
+  height: calc(100% - 36px);
+  display:grid;
+  grid-template-columns: 1fr 380px;
+  gap: 18px;
+  padding: 22px 24px 24px;
+}
+
+.left {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  position: relative;
+}
+
+/* --- THE ORB --- */
+.orb-wrap {
+  position: relative;
+  width: 420px; height: 420px;
+  display:flex; align-items:center; justify-content:center;
+}
+.orb-ring {
+  position:absolute; border-radius:50%;
+  border:1px solid var(--panel-border);
+}
+.ring-1 { width: 420px; height:420px; border-color: rgba(0,229,255,0.18); }
+.ring-2 { width: 336px; height:336px; border-color: rgba(0,229,255,0.28); }
+.ring-3 { width: 264px; height:264px; border-color: rgba(0,229,255,0.35);
+  box-shadow: 0 0 50px rgba(0,229,255,0.07), inset 0 0 40px rgba(0,229,255,0.05);
+}
+.ring-ticks {
+  position:absolute; width:336px; height:336px; border-radius:50%;
+}
+.ring-ticks::before, .ring-ticks::after {
+  content:''; position:absolute; inset:0; border-radius:50%;
+  background: conic-gradient(from 0deg, transparent 0deg 3deg, var(--cyan) 3deg 5deg, transparent 5deg 30deg);
+  mask: radial-gradient(circle, transparent 158px, #000 160px 168px, transparent 170px);
+  opacity:.9;
+}
+.ring-ticks::after { transform: rotate(15deg); opacity:.45; }
+
+#rotator { position:absolute; width:336px; height:336px; }
+#rotator svg { width:100%; height:100%; overflow:visible; }
+
+.orb-core {
+  position: relative;
+  width: 170px; height: 170px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, #89f7ff 0%, #00c8ff 34%, #007ea8 62%, #022735 100%);
+  box-shadow:
+    0 0 35px var(--cyan-glow),
+    0 0 80px rgba(0,229,255,0.22),
+    inset 0 0 35px rgba(255,255,255,0.35);
+  display:flex; align-items:center; justify-content:center;
+  transition: transform .15s ease;
+}
+.orb-core::after {
+  content:''; position:absolute; inset:18px; border-radius:50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.85) 0%, rgba(180,250,255,0.35) 35%, transparent 70%);
+  filter: blur(4px);
+}
+.orb-core.listening {
+  animation: pulse 1.45s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { transform: scale(1); box-shadow: 0 0 35px var(--cyan-glow), 0 0 80px rgba(0,229,255,0.22), inset 0 0 35px rgba(255,255,255,0.35);}
+  50% { transform: scale(1.035); box-shadow: 0 0 55px var(--cyan-glow), 0 0 120px rgba(0,229,255,0.33), inset 0 0 45px rgba(255,255,255,0.45);}
+}
+
+.waveform {
+  position:absolute; width: 440px; height: 96px;
+  bottom: 18px; left:50%; transform:translateX(-50%);
+  display:flex; align-items:center; justify-content:center; gap:3px;
+  opacity:.95;
+}
+.waveform span {
+  width:3px; border-radius:2px;
+  background: linear-gradient(to top, transparent, var(--cyan));
+  box-shadow: 0 0 8px rgba(0,229,255,.45);
+  animation: wave 1.15s ease-in-out infinite;
+}
+@keyframes wave { 0%,100%{height:8px;opacity:.55} 50%{height:42px;opacity:1} }
+
+.status-line {
+  margin-top: 24px;
+  text-align:center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size:13px; letter-spacing:.08em;
+  color: var(--cyan);
+  text-shadow: 0 0 12px rgba(0,229,255,0.6);
+}
+.status-sub { margin-top:6px; color: var(--muted); font-size:12px; letter-spacing:.02em; }
+
+.quick-actions {
+  margin-top: 28px;
+  display:flex; gap:12px; flex-wrap:wrap; justify-content:center;
+}
+.chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border:1px solid rgba(0,229,255,0.28);
+  background: rgba(0,229,255,0.055);
+  color: #bff7ff;
+  cursor:pointer;
+  transition:.15s;
+}
+.chip:hover { background: rgba(0,229,255,0.12); border-color: var(--cyan); box-shadow: 0 0 18px rgba(0,229,255,0.18); }
+
+/* Right panel */
+.right {
+  display:flex; flex-direction:column; gap:16px;
+  min-height:0;
+}
+.panel {
+  background: linear-gradient(180deg, rgba(13,26,38,.82), rgba(9,18,28,.78));
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.035);
+  overflow:hidden;
+}
+.panel h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--muted);
+  padding: 13px 16px 10px;
+  border-bottom: 1px solid rgba(0,229,255,0.12);
+}
+.panel-body { padding: 14px 16px; }
+
+.transcript {
+  height: 240px; overflow-y:auto;
+  font-size: 14px; line-height:1.55;
+}
+.msg { margin-bottom:12px; }
+.msg .who { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted); margin-bottom:2px;}
+.msg.user .who { color: #ffc36a; }
+.msg.jarvis .who { color: var(--cyan); }
+
+.tools { display:flex; flex-direction:column; gap:9px; font-family:'JetBrains Mono',monospace; font-size:12px;}
+.tool-row { display:flex; align-items:center; gap:10px; color:#b9d9e3; }
+.tool-dot { width:7px; height:7px; border-radius:50%; background: var(--cyan); box-shadow:0 0 8px var(--cyan-glow);}
+.tool-dot.dim { background:#4a6873; box-shadow:none;}
+.tool-row small { color:var(--muted); margin-left:auto; }
+
+.sys-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:10px;
+  font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#9dc9d6;
+}
+.sys-grid div { background: rgba(0,229,255,0.045); border:1px solid rgba(0,229,255,0.12); border-radius:10px; padding:10px; }
+.sys-grid span { display:block; color: var(--muted); font-size:10px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.08em;}
+
+.input-row {
+  display:flex; gap:8px; align-items:center;
+  padding: 12px 14px;
+  border-top:1px solid rgba(0,229,255,0.12);
+  background: rgba(0,0,0,0.18);
+}
+.input-row input {
+  flex:1; background: rgba(0,0,0,0.35);
+  border:1px solid rgba(0,229,255,0.22); color: var(--text);
+  border-radius: 10px; padding: 10px 12px;
+  font-family: 'Space Grotesk', sans-serif; font-size:14px; outline:none;
+}
+.input-row input::placeholder { color:#5a7d8a; }
+.btn {
+  padding: 10px 14px; border-radius:10px; border:1px solid rgba(0,229,255,0.35);
+  background: rgba(0,229,255,0.09); color: #cfffff; cursor:pointer;
+  font-family:'JetBrains Mono', monospace; font-size:12px;
+  transition:.15s;
+}
+.btn:hover { background: rgba(0,229,255,0.18); box-shadow: 0 0 18px rgba(0,229,255,0.18);}
+.btn.primary { background: rgba(0,229,255,0.18); border-color: var(--cyan); }
+
+.live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background: var(--red); box-shadow:0 0 10px rgba(255,92,110,.7); animation: blink 1.2s infinite; margin-right:7px; vertical-align:middle;}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+.footer-note { text-align:center; font-family:'JetBrains Mono',monospace; font-size:11px; color:#4f6f7b; margin-top:10px; }
+
+/* scrollbar */
+.transcript::-webkit-scrollbar { width:6px;}
+.transcript::-webkit-scrollbar-thumb { background: rgba(0,229,255,0.22); border-radius:4px;}
+
+@media (max-width: 980px){
+  .wrap { grid-template-columns: 1fr; }
+  .right { order:-1;}
+  .orb-wrap { transform: scale(.84); }
+}
+</style>
+</head>
+<body>
+  <div class="titlebar">
+    <div>J.A.R.V.I.S — Windows  •  v0.1.0</div>
+    <div class="traffic"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+  </div>
+
+  <div class="wrap">
+    <div class="left">
+      <div class="orb-wrap">
+        <div class="orb-ring ring-1"></div>
+        <div class="orb-ring ring-2"></div>
+        <div class="orb-ring ring-3"></div>
+        <div class="ring-ticks" id="ticks"></div>
+        <div id="rotator">
+          <svg viewBox="0 0 336 336"><g fill="none" stroke="#00e5ff" stroke-opacity=".9">
+            <circle cx="168" cy="168" r="164" stroke-width="1" stroke-dasharray="2 18"/>
+          </g></svg>
+        </div>
+        <div class="orb-core" id="orb"></div>
+        <div class="waveform" id="waveform"></div>
+      </div>
+
+      <div class="status-line" id="status">IDLE • SAY "HEY JARVIS"</div>
+      <div class="status-sub" id="substatus">Whisper STT • GPT-4o • ElevenLabs</div>
+
+      <div class="quick-actions">
+        <div class="chip" onclick="demo('screen')">👁  Analyze screen</div>
+        <div class="chip" onclick="demo('code')">⚡ Run code task</div>
+        <div class="chip" onclick="demo('search')">🌐 Web search</div>
+        <div class="chip" onclick="toggleListen()">🎙 Push to talk</div>
+      </div>
+      <div class="footer-note">Space = push-to-talk • Esc = interrupt • This is the Electron HUD preview</div>
+    </div>
+
+    <div class="right">
+      <div class="panel" style="flex:1.15; display:flex; flex-direction:column;">
+        <h3><span class="live-dot"></span>Live Transcript</h3>
+        <div class="panel-body transcript" id="transcript">
+          <div class="msg jarvis"><div class="who">JARVIS • 14:22:04</div>Good afternoon. All systems operational. How can I help?</div>
+          <div class="msg user"><div class="who">YOU • 14:22:11</div>Hey Jarvis, what's on my screen?</div>
+          <div class="msg jarvis"><div class="who">JARVIS • 14:22:13</div>Analyzing display… I see a VS Code window with a React component open, and a terminal running a dev server on port 5173.</div>
+        </div>
+        <div class="input-row">
+          <input id="chatInput" placeholder='Type, or say "Hey Jarvis"...' />
+          <button class="btn primary" onclick="send()">Send</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Tool Activity</h3>
+        <div class="panel-body tools" id="tools">
+          <div class="tool-row"><div class="tool-dot"></div> screen_capture <small>320ms</small></div>
+          <div class="tool-row"><div class="tool-dot"></div> web_search <small>1.2s</small></div>
+          <div class="tool-row"><div class="tool-dot dim"></div> run_terminal <small>—</small></div>
+          <div class="tool-row"><div class="tool-dot dim"></div> file_write <small>—</small></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>System</h3>
+        <div class="panel-body sys-grid">
+          <div><span>STT</span>Whisper local</div>
+          <div><span>LLM</span>GPT-4o</div>
+          <div><span>TTS</span>ElevenLabs</div>
+          <div><span>Memory</span>127 facts</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+// Waveform
+const wf = document.getElementById('waveform');
+for(let i=0;i<52;i++){
+  const s = document.createElement('span');
+  s.style.animationDelay = (i*0.045 % 0.8)+'s';
+  s.style.height = (6+Math.random()*12)+'px';
+  wf.appendChild(s);
+}
+
+// Rotator
+let rot = 0;
+setInterval(()=>{ rot+=0.22; document.getElementById('rotator').style.transform = `rotate(${rot}deg)`; }, 16);
+
+// Listening toggle
+let listening = false;
+const orb = document.getElementById('orb');
+const statusEl = document.getElementById('status');
+function setListening(v){
+  listening = v;
+  orb.classList.toggle('listening', v);
+  statusEl.textContent = v ? 'LISTENING • SPEAK NOW' : 'IDLE • SAY "HEY JARVIS"';
+  document.querySelectorAll('#waveform span').forEach(el => el.style.animationPlayState = v ? 'running' : 'paused');
+}
+function toggleListen(){ setListening(!listening); }
+
+document.addEventListener('keydown', e=>{
+  if(e.code === 'Space' && document.activeElement.tagName !== 'INPUT'){ e.preventDefault(); setListening(true); }
+  if(e.code === 'Escape'){ setListening(false); }
+});
+document.addEventListener('keyup', e=>{
+  if(e.code === 'Space') setListening(false);
+});
+
+// Transcript demo
+const transcript = document.getElementById('transcript');
+function addMsg(who, text){
+  const d = document.createElement('div');
+  d.className = 'msg ' + (who==='YOU' ? 'user':'jarvis');
+  const t = new Date().toLocaleTimeString('en-GB');
+  d.innerHTML = `<div class="who">${who} • ${t}</div>${text}`;
+  transcript.appendChild(d);
+  transcript.scrollTop = transcript.scrollHeight;
+}
+function send(){
+  const inp = document.getElementById('chatInput');
+  const v = inp.value.trim(); if(!v) return;
+  addMsg('YOU', v); inp.value='';
+  setTimeout(()=> addMsg('JARVIS', 'Got it. This is the preview HUD — in the real app this hits the Python FastAPI backend with GPT-4o function calling.'), 680);
+}
+
+document.getElementById('chatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
+
+function demo(kind){
+  const lines = {
+    screen: "Analyzing screen… VS Code, 3 Chrome tabs, Task Manager at 14% CPU.",
+    code: "Writing task runner… done. Tests passed, 0 errors.",
+    search: "Searched web for 'GPT-4o function calling'. Summarized top 3 results."
+  };
+  addMsg('JARVIS', lines[kind] || 'Running...');
+}
+
+setListening(false);
+</script>
+</body>
+</html>

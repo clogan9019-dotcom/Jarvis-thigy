@@ -1,0 +1,29 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+websockets==13.0
+python-dotenv==1.0.1
+pydantic==2.9.2
+
+openai==1.51.0
+elevenlabs==1.11.0
+
+faster-whisper==1.0.3
+sounddevice==0.5.1
+soundfile==0.12.1
+numpy==1.26.4
+
+chromadb==0.5.8
+sentence-transformers==3.1.1
+
+mss==9.0.1
+pillow==10.4.0
+pyautogui==0.9.54
+pygetwindow==0.0.9
+psutil==6.0.0
+
+httpx==0.27.2
+beautifulsoup4==4.12.3
+duckduckgo-search==6.3.4
+
+# Windows TTS fallback
+pywin32==306; sys_platform == "win32"
