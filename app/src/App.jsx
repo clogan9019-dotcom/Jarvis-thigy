@@ -89,21 +89,14 @@ export default function App() {
   const [speakWord, setSpeakWord] = useState('')
   const [audioLevel, setAudioLevel] = useState(0.15)
 
-  const [msgs, setMsgs] = useState([
-    { who: 'JARVIS', text: 'Neural interface online. Always listening.' }
-  ])
+  const [msgs, setMsgs] = useState([{ who: 'JARVIS', text: '…' }])
   const [input, setInput] = useState('')
   const [showHud, setShowHud] = useState(true)
   const [showDock, setShowDock] = useState(true)
 
   const [research, setResearch] = useState({
-    active: false,
-    topic: '',
-    queries: 0,
-    sources: 0,
-    progress: 0,
-    depth: '0 / 0',
-    current_query: ''
+    active: false, topic: '', queries: 0, sources: 0,
+    progress: 0, depth: '0 / 0', current_query: ''
   })
 
   const wsRef = useRef(null)
@@ -116,21 +109,8 @@ export default function App() {
     return () => clearInterval(id)
   }, [speaking])
 
-  useEffect(() => {
-    fetch(BACKEND + '/health')
-      .then(r => r.json())
-      .then(data => {
-        console.log('[JARVIS] Backend status:', data)
-        if (!data.ollama?.connected) {
-          setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Ollama not connected. Run: ollama serve' }])
-        }
-      })
-      .catch(() => {
-        setMsgs(m => [...m, { who: 'JARVIS', text: '❌ Backend offline. Run: python main.py in backend folder' }])
-      })
-  }, [])
-
-  /* ---------- Play TTS audio served by backend ---------- */
+  /* ---------- Play TTS audio via backend /audio HTTP endpoint ---------- */
+  // Defined BEFORE any useEffect that depends on it
   const playTtsAudio = useCallback((filePath) => {
     try {
       const filename = filePath.replace(/\\/g, '/').split('/').pop()
@@ -141,6 +121,38 @@ export default function App() {
       console.warn('[TTS] error:', e)
     }
   }, [])
+
+  /* ---------- Startup: health check + personalised greeting ---------- */
+  useEffect(() => {
+    Promise.all([
+      fetch(BACKEND + '/health').then(r => r.json()).catch(() => null),
+      fetch(BACKEND + '/greeting').then(r => r.json()).catch(() => null),
+    ]).then(([health, greet]) => {
+      if (!health) {
+        setMsgs([{ who: 'JARVIS', text: '❌ Backend offline. Run: python main.py in the backend folder.' }])
+        return
+      }
+
+      const greetText = greet?.greeting || 'Neural interface online. Always at your service.'
+      setMsgs([{ who: 'JARVIS', text: greetText }])
+
+      if (!health.ollama?.connected) {
+        setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Ollama not connected. Run: ollama serve' }])
+      }
+
+      // Speak the greeting out loud
+      if (greet?.greeting) {
+        fetch(BACKEND + '/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: greet.greeting })
+        })
+          .then(r => r.json())
+          .then(d => { if (d.ok && d.audio_path) playTtsAudio(d.audio_path) })
+          .catch(() => {})
+      }
+    })
+  }, [playTtsAudio])
 
   /* ---------- WebSocket ---------- */
   useEffect(() => {
@@ -175,14 +187,11 @@ export default function App() {
             // backend is about to send TTS audio
 
           } else if (d.type === 'tts') {
-            // backend generated audio file — play it via the /audio HTTP endpoint
             if (d.path) playTtsAudio(d.path)
 
           } else if (d.type === 'stt_result') {
-            // backend finished recording + transcribing from mic
             setListening(false)
             if (d.ok && d.text?.trim()) {
-              // send the transcribed text to the AI as a chat message
               send(d.text.trim())
             } else {
               setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ STT: ${d.error || 'No speech detected'}` }])
@@ -216,7 +225,9 @@ export default function App() {
             setSpeakWord('')
             setMsgs(m => m.map(x => ({...x, streaming:false})))
             setResearch(r => r.active ? { ...r, progress: 100 } : r)
-            setTimeout(()=> setResearch(r => r.progress >= 100 ? {active:false, topic:'', queries:0, sources:0, progress:0, depth:'0 / 0', current_query:''} : r), 2200)
+            setTimeout(()=> setResearch(r => r.progress >= 100
+              ? {active:false, topic:'', queries:0, sources:0, progress:0, depth:'0 / 0', current_query:''}
+              : r), 2200)
           }
         }
 
@@ -248,7 +259,7 @@ export default function App() {
     }
   }
 
-  /* ---------- Push-to-Talk: asks the backend to record + transcribe ---------- */
+  /* ---------- Push-to-Talk: backend records + transcribes from mic ---------- */
   const startPTT = useCallback((duration = 5.0) => {
     if (listening) return
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
@@ -329,7 +340,10 @@ export default function App() {
 
         <div className="transcript-bar" style={{opacity: showHud ? 1 : 0.35}}>
           {lastMsgs.map((m,i)=>(
-            <div key={i} className="line"><span className={`who ${m.who==='YOU'?'you':''}`}>{m.who==='YOU'?'YOU >':'JARVIS >'}</span>{m.text}</div>
+            <div key={i} className="line">
+              <span className={`who ${m.who==='YOU'?'you':''}`}>{m.who==='YOU'?'YOU >':'JARVIS >'}</span>
+              {m.text}
+            </div>
           ))}
         </div>
 
