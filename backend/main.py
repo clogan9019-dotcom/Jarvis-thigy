@@ -179,7 +179,7 @@ async def ws_endpoint(ws: WebSocket):
                 try:
                     import sounddevice as sd
                     # Stop any leftover stream
-                    if _rec["stream"]:
+                    if _rec.get("stream"):
                         try:
                             _rec["stream"].stop()
                             _rec["stream"].close()
@@ -212,7 +212,8 @@ async def ws_endpoint(ws: WebSocket):
                 import time as _time
 
                 _rec["active"] = False
-                stream = _rec.pop("stream", None)
+                stream = _rec.get("stream")
+                _rec["stream"] = None
                 if stream:
                     try:
                         stream.stop()
