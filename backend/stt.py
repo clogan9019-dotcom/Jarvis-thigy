@@ -68,7 +68,7 @@ def transcribe_audio(audio_path: str = None) -> dict:
             audio_path,
             language="en",
             beam_size=5,
-            vad_filter=True
+            vad_filter=False   # VAD was too aggressive for short PTT clips
         )
 
         full_text = " ".join([segment.text for segment in segments])
