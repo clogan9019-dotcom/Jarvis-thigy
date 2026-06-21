@@ -85,9 +85,21 @@ def tts_to_file(text: str) -> str | None:
     Convert text to speech. Returns path to audio file.
     Priority:
       1. ElevenLabs (if ELEVENLABS_API_KEY set)
-      2. Edge TTS - en-GB-RyanNeural (free Microsoft neural voice, JARVIS-like)
-      3. Windows SAPI via PowerShell (built-in fallback)
-      4. Windows SAPI via pywin32
+    # ── 2. gTTS — British accent (Google TTS, free, needs internet) ────────────
+    try:
+        from gtts import gTTS
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
+        tts_obj = gTTS(text=text, lang="en", tld="co.uk", slow=False)
+        tts_obj.save(str(out_path))
+        if out_path.exists() and out_path.stat().st_size > 0:
+            print(f"[TTS] gTTS British → {out_path.name}")
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] gTTS failed: {e}")
+
+      3. Edge TTS - en-GB-RyanNeural (free Microsoft neural voice, JARVIS-like)
+      3. Edge TTS - en-GB-RyanNeural (free Microsoft neural, needs internet)
+      4. Windows SAPI via PowerShell (built-in fallback)
       5. pyttsx3
     """
     out_dir = Path(tempfile.gettempdir()) / "jarvis_tts"
@@ -112,7 +124,7 @@ def tts_to_file(text: str) -> str | None:
         except Exception as e:
             print(f"[TTS] ElevenLabs failed: {e}")
 
-    # ── 2. Edge TTS (free neural voice — en-GB-RyanNeural) ──────────────────
+      2. gTTS British accent (free Google TTS, co.uk = British)
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
         ok = asyncio.run(_edge_tts_async(text, str(out_path)))
@@ -122,7 +134,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Edge TTS error: {e}")
 
-    # ── 3. PowerShell SAPI (no Python deps needed) ───────────────────────────
+    # ── 4. PowerShell SAPI (no Python deps needed) ───────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         safe_text = _escape_ps(text)
@@ -158,7 +170,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] PowerShell SAPI error: {e}")
 
-    # ── 4. win32com SAPI ─────────────────────────────────────────────────────
+    # ── 5. win32com SAPI ─────────────────────────────────────────────────────
     try:
         import win32com.client
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
@@ -180,7 +192,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] win32com SAPI failed: {e}")
 
-    # ── 5. pyttsx3 ───────────────────────────────────────────────────────────
+    # ── 6. pyttsx3 ───────────────────────────────────────────────────────────
     try:
         import pyttsx3
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
