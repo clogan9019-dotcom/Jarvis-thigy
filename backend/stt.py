@@ -13,41 +13,48 @@ _model_cache: dict = {}
 
 def _load_whisper_model(model_size: str):
     """
-    Load WhisperModel once and cache it for the lifetime of the process.
-    GPU: int8_float16 — fastest on modern NVIDIA cards (Ampere+).
-    CPU: int8 fallback.
+    Load WhisperModel once and cache it.
+    GPU: int8_float16 preferred. Falls back to CPU if DLLs are wrong/missing.
+    NOTE: CUDA init can appear to succeed but fail at inference time (missing
+    cublas DLL), so transcribe_audio catches that and calls _load_cpu_model().
     """
     if model_size in _model_cache:
         return _model_cache[model_size]
 
     from faster_whisper import WhisperModel
-
     download_root = os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
 
-    # Try GPU with int8_float16 (fastest on Ampere/RTX cards)
     for compute in ("int8_float16", "float16"):
         try:
             model = WhisperModel(
-                model_size,
-                device="cuda",
+                model_size, device="cuda",
                 compute_type=compute,
                 download_root=download_root
             )
-            print(f"[STT] Loaded Whisper model: {model_size} (device: cuda, compute: {compute})")
+            print(f"[STT] Loaded Whisper model: {model_size} (cuda/{compute})")
             _model_cache[model_size] = model
             return model
         except Exception as e:
             print(f"[STT] CUDA/{compute} unavailable: {e}")
 
-    # CPU int8 fallback
+    return _load_cpu_model(model_size)
+
+
+def _load_cpu_model(model_size: str):
+    """Always returns a CPU int8 model, cached separately from the GPU one."""
+    cpu_key = f"{model_size}_cpu"
+    if cpu_key in _model_cache:
+        return _model_cache[cpu_key]
+
+    from faster_whisper import WhisperModel
+    download_root = os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
     model = WhisperModel(
-        model_size,
-        device="cpu",
+        model_size, device="cpu",
         compute_type="int8",
         download_root=download_root
     )
-    print(f"[STT] Loaded Whisper model: {model_size} (device: cpu, compute: int8)")
-    _model_cache[model_size] = model
+    print(f"[STT] Loaded Whisper model: {model_size} (cpu/int8)")
+    _model_cache[cpu_key] = model
     return model
 
 
@@ -68,14 +75,26 @@ def transcribe_audio(audio_path: str = None) -> dict:
 
         t0 = time.time()
         print("[STT] Transcribing...")
-        segments, info = model.transcribe(
-            audio_path,
-            language="en",
-            beam_size=1,        # greedy — instant, fine for conversational speech
-            vad_filter=False,   # VAD was too aggressive for short PTT clips
-        )
 
-        full_text = " ".join([seg.text for seg in segments]).strip()
+        def _run_transcribe(m):
+            segs, inf = m.transcribe(
+                audio_path, language="en",
+                beam_size=1, vad_filter=False
+            )
+            return " ".join([s.text for s in segs]).strip(), inf
+
+        try:
+            full_text, info = _run_transcribe(model)
+        except Exception as cuda_err:
+            err_lower = str(cuda_err).lower()
+            if any(k in err_lower for k in ("dll", "cuda", "cublas", "library", "cublaslt")):
+                print(f"[STT] CUDA inference failed ({cuda_err}) — falling back to CPU")
+                _model_cache.pop(model_size, None)  # evict broken GPU entry
+                cpu_model = _load_cpu_model(model_size)
+                full_text, info = _run_transcribe(cpu_model)
+            else:
+                raise
+
         elapsed = time.time() - t0
         print(f"[STT] Done! {elapsed:.2f}s | audio={info.duration:.1f}s | text={full_text[:60]!r}")
 
