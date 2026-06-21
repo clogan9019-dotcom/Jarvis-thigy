@@ -8,48 +8,61 @@ import time
 import tempfile
 from pathlib import Path
 
-def transcribe_audio(audio_path: str = None) -> dict:
+
+def _load_whisper_model(model_size: str):
     """
-    Transcribe audio file to text using faster-whisper.
-    Completely local, no API keys needed!
-    
-    Args:
-        audio_path: Path to audio file (wav, mp3, etc.)
-                   If None, uses microphone input
-    
-    Returns:
-        {"ok": True, "text": "transcribed text"}
+    Load WhisperModel, preferring CUDA (GPU). Falls back to CPU automatically.
+    faster-whisper uses ctranslate2 which has its own CUDA support,
+    independent of whether torch is installed.
     """
-    
-    if audio_path is None:
-        return {"ok": False, "error": "Audio path required. Implement mic recording separately."}
-    
-    if not os.path.exists(audio_path):
-        return {"ok": False, "error": f"File not found: {audio_path}"}
-    
+    from faster_whisper import WhisperModel
+
+    download_root = os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
+
+    # Try GPU first
     try:
-        from faster_whisper import WhisperModel
-        
-        model_size = os.getenv("WHISPER_MODEL", "base")
-        
-        try:
-            import torch
-            use_cuda = torch.cuda.is_available()
-        except ImportError:
-            use_cuda = False
-        
-        device = "cuda" if use_cuda else "cpu"
-        compute_type = "float16" if use_cuda else "int8"
-        
-        print(f"[STT] Loading Whisper model: {model_size} (device: {device}, compute: {compute_type})")
-        
         model = WhisperModel(
             model_size,
-            device=device,
-            compute_type=compute_type,
-            download_root=os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
+            device="cuda",
+            compute_type="float16",
+            download_root=download_root
         )
-        
+        print(f"[STT] Loaded Whisper model: {model_size} (device: cuda, compute: float16)")
+        return model
+    except Exception as e:
+        print(f"[STT] CUDA unavailable ({e}), falling back to CPU")
+
+    # CPU fallback
+    model = WhisperModel(
+        model_size,
+        device="cpu",
+        compute_type="int8",
+        download_root=download_root
+    )
+    print(f"[STT] Loaded Whisper model: {model_size} (device: cpu, compute: int8)")
+    return model
+
+
+def transcribe_audio(audio_path: str = None) -> dict:
+    """
+    Transcribe an audio file using faster-whisper. Completely local, no API keys.
+
+    Args:
+        audio_path: Path to audio file (wav, mp3, etc.)
+
+    Returns:
+        {"ok": True, "text": "transcribed text"} or {"ok": False, "error": "..."}
+    """
+    if audio_path is None:
+        return {"ok": False, "error": "Audio path required."}
+
+    if not os.path.exists(audio_path):
+        return {"ok": False, "error": f"File not found: {audio_path}"}
+
+    try:
+        model_size = os.getenv("WHISPER_MODEL", "base")
+        model = _load_whisper_model(model_size)
+
         print("[STT] Transcribing...")
         segments, info = model.transcribe(
             audio_path,
@@ -57,11 +70,10 @@ def transcribe_audio(audio_path: str = None) -> dict:
             beam_size=5,
             vad_filter=True
         )
-        
+
         full_text = " ".join([segment.text for segment in segments])
-        
         print(f"[STT] Done! Duration: {info.duration:.1f}s, Text: {full_text[:50]}...")
-        
+
         return {
             "ok": True,
             "text": full_text.strip(),
@@ -69,12 +81,12 @@ def transcribe_audio(audio_path: str = None) -> dict:
             "duration": info.duration,
             "model": model_size
         }
-        
+
     except ImportError:
         return {
             "ok": False,
             "error": "faster-whisper not installed. Run: pip install faster-whisper",
-            "hint": "For GPU acceleration: pip install faster-whisper[torch]"
+            "hint": "For GPU: pip install faster-whisper ctranslate2"
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -82,15 +94,14 @@ def transcribe_audio(audio_path: str = None) -> dict:
 
 def transcribe_microphone(duration_seconds: float = 5.0) -> dict:
     """
-    Record from microphone and transcribe - completely local!
-    
+    Record from microphone and transcribe. Completely local.
+
     Args:
         duration_seconds: How long to record (default 5 seconds)
-    
+
     Returns:
         {"ok": True, "text": "transcribed text"}
     """
-    
     try:
         import sounddevice as sd
         import numpy as np
@@ -98,10 +109,9 @@ def transcribe_microphone(duration_seconds: float = 5.0) -> dict:
     except ImportError:
         return {
             "ok": False,
-            "error": "sounddevice not installed. Run: pip install sounddevice scipy",
-            "hint": "Also install: pip install numpy"
+            "error": "sounddevice not installed. Run: pip install sounddevice scipy numpy"
         }
-    
+
     try:
         print(f"[STT] Recording for {duration_seconds}s...")
         recording = sd.rec(
@@ -111,26 +121,21 @@ def transcribe_microphone(duration_seconds: float = 5.0) -> dict:
             dtype='float32'
         )
         sd.wait()
-        
+
         temp_dir = Path(tempfile.gettempdir()) / "jarvis_stt"
         temp_dir.mkdir(parents=True, exist_ok=True)
         temp_path = temp_dir / f"mic_{int(time.time())}.wav"
-        
+
         audio_16bit = (recording * 32767).astype(np.int16)
         wavfile.write(str(temp_path), 16000, audio_16bit)
-        
+
         print("[STT] Recording complete, transcribing...")
-        
         return transcribe_audio(str(temp_path))
-        
+
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 if __name__ == "__main__":
-    print("[STT] Testing transcription...")
-    print("Note: You need an audio file to test. Run transcribe_audio('path/to/file.wav')")
-    print("\nTo install dependencies:")
-    print("  pip install faster-whisper sounddevice scipy numpy")
-    print("\nOptional GPU acceleration:")
-    print("  pip install torch")
+    print("To install dependencies: pip install faster-whisper sounddevice scipy numpy")
+    print("For GPU support: ensure ctranslate2 is built with CUDA")
