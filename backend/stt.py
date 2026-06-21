@@ -47,7 +47,7 @@
       for path in candidates:
           if os.path.isdir(path) and path not in added:
               try:
-                  os.add_dll_directory(path)   # Python 3.8+ Windows-only
+                  os.add_dll_directory(path)
                   added.append(path)
               except (AttributeError, OSError):
                   pass
@@ -62,8 +62,6 @@
       """
       Load WhisperModel once and cache it.
       GPU: int8_float16 preferred. Falls back to CPU if DLLs are wrong/missing.
-      NOTE: CUDA init can appear to succeed but fail at inference time (missing
-      cublas DLL), so transcribe_audio catches that and calls _load_cpu_model().
       """
       if model_size in _model_cache:
           return _model_cache[model_size]
@@ -118,8 +116,6 @@
           return {"ok": False, "error": f"File not found: {audio_path}"}
 
       try:
-          # tiny.en: fastest, English-only — perfect for voice commands
-          # Change WHISPER_MODEL env var to "base" or "small" for higher accuracy
           model_size = os.getenv("WHISPER_MODEL", "tiny.en")
           model = _load_whisper_model(model_size)
 
@@ -139,7 +135,7 @@
               err_lower = str(cuda_err).lower()
               if any(k in err_lower for k in ("dll", "cuda", "cublas", "library", "cublaslt")):
                   print(f"[STT] CUDA inference failed ({cuda_err}) — falling back to CPU")
-                  _model_cache.pop(model_size, None)  # evict broken GPU entry
+                  _model_cache.pop(model_size, None)
                   cpu_model = _load_cpu_model(model_size)
                   full_text, info = _run_transcribe(cpu_model)
               else:
