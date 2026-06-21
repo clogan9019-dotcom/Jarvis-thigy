@@ -38,6 +38,9 @@ app.mount("/audio", StaticFiles(directory=str(_tts_dir)), name="audio")
 
 agent = JarvisAgent()
 
+# ── PTT recording state (one active session at a time) ───────────────────────
+_rec: dict = {"active": False, "chunks": [], "stream": None}
+
 # ============ MODELS ============
 class ChatIn(BaseModel):
     message: str
@@ -171,16 +174,76 @@ async def ws_endpoint(ws: WebSocket):
             elif data.get("type") == "interrupt":
                 await ws.send_text(json.dumps({"type": "interrupted"}))
 
-            elif data.get("type") == "transcribe_mic":
-                # Run blocking mic recording + transcription in a thread
-                import functools
-                duration = float(data.get("duration", 5.0))
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, functools.partial(transcribe_microphone, duration)
-                )
-                print(f"[STT] Result: ok={result.get('ok')}, text={repr(result.get('text','')[:60])}")
-                await ws.send_text(json.dumps({"type": "stt_result", **result}))
+            elif data.get("type") == "transcribe_mic_start":
+                # Start streaming mic capture (non-blocking InputStream callback)
+                try:
+                    import sounddevice as sd
+                    # Stop any leftover stream
+                    if _rec["stream"]:
+                        try:
+                            _rec["stream"].stop()
+                            _rec["stream"].close()
+                        except Exception:
+                            pass
+                    _rec["active"] = True
+                    _rec["chunks"] = []
+
+                    def _audio_cb(indata, frames, time_info, status):
+                        if _rec["active"]:
+                            _rec["chunks"].append(indata.copy())
+
+                    stream = sd.InputStream(
+                        samplerate=16000, channels=1,
+                        dtype="float32", callback=_audio_cb
+                    )
+                    stream.start()
+                    _rec["stream"] = stream
+                    print("[STT] PTT recording started…")
+                except Exception as e:
+                    await ws.send_text(json.dumps({
+                        "type": "stt_result", "ok": False,
+                        "error": f"Could not open mic: {e}"
+                    }))
+
+            elif data.get("type") == "transcribe_mic_stop":
+                # Stop capture, save WAV, transcribe in thread
+                import numpy as np
+                from scipy.io import wavfile as scipy_wavfile
+                import time as _time
+
+                _rec["active"] = False
+                stream = _rec.pop("stream", None)
+                if stream:
+                    try:
+                        stream.stop()
+                        stream.close()
+                    except Exception:
+                        pass
+
+                chunks = _rec["chunks"]
+                _rec["chunks"] = []
+
+                if not chunks:
+                    await ws.send_text(json.dumps({
+                        "type": "stt_result", "ok": False, "error": "No audio recorded"
+                    }))
+                else:
+                    audio = np.concatenate(chunks, axis=0)
+                    duration_s = len(audio) / 16000
+                    print(f"[STT] PTT stopped — {duration_s:.1f}s recorded, transcribing…")
+
+                    stt_dir = Path(tempfile.gettempdir()) / "jarvis_stt"
+                    stt_dir.mkdir(parents=True, exist_ok=True)
+                    tmp_wav = stt_dir / f"ptt_{int(_time.time())}.wav"
+                    scipy_wavfile.write(str(tmp_wav), 16000,
+                                        (audio * 32767).astype(np.int16))
+
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None, transcribe_audio, str(tmp_wav)
+                    )
+                    print(f"[STT] Result: ok={result.get('ok')}, text={repr(result.get('text','')[:60])}")
+                    await ws.send_text(json.dumps({"type": "stt_result", **result}))
 
     except WebSocketDisconnect:
         pass
