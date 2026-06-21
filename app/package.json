@@ -8,9 +8,10 @@
   "scripts": {
     "dev": "vite",
     "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "vite build",
+    "build": "npm run generate:icons && vite build",
     "build:win": "npm run build && electron-builder --win nsis",
-    "start": "electron ."
+    "start": "electron .",
+    "generate:icons": "node scripts/generate-icons.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
@@ -28,7 +29,9 @@
     "appId": "com.jarvis.desktop",
     "productName": "J.A.R.V.I.S",
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {
@@ -41,7 +44,11 @@
       {
         "from": "../backend",
         "to": "backend",
-        "filter": ["**/*", "!**/__pycache__", "!**/.venv"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__",
+          "!**/.venv"
+        ]
       }
     ]
   }

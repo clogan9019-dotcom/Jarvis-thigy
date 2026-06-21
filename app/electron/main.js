@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 let win, tray, pyProc;
 const isDev = !app.isPackaged;
 const BACKEND_PORT = 8765;
+const APP_ICON = path.join(__dirname, '../build/icon.png');
 
 function startBackend() {
   if (isDev) return; // run backend manually in dev
@@ -41,7 +42,7 @@ function createWindow() {
       nodeIntegration: false
     },
     show: false,
-    icon: path.join(__dirname, '../build/icon.png')
+    icon: APP_ICON
   });
 
   if (isDev) {
@@ -55,8 +56,8 @@ function createWindow() {
 }
 
 function createTray() {
-  const icon = nativeImage.createEmpty();
-  tray = new Tray(icon);
+  const icon = nativeImage.createFromPath(APP_ICON);
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
   tray.setToolTip('J.A.R.V.I.S');
   const contextMenu = Menu.buildFromTemplate([
     { label: 'Show JARVIS', click: () => win.show() },
