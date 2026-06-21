@@ -188,17 +188,28 @@ async def ws_endpoint(ws: WebSocket):
                     _rec["active"] = True
                     _rec["chunks"] = []
 
+                    # Query the mic's native sample rate — many Windows mics
+                    # only support 44100 or 48000 Hz, NOT 16000, causing silence
+                    try:
+                        dev_info = sd.query_devices(kind="input")
+                        native_sr = int(dev_info.get("default_samplerate", 16000))
+                    except Exception:
+                        native_sr = 16000
+                    _rec["sample_rate"] = native_sr
+
                     def _audio_cb(indata, frames, time_info, status):
+                        if status:
+                            print(f"[STT] Stream status: {status}")
                         if _rec["active"]:
                             _rec["chunks"].append(indata.copy())
 
                     stream = sd.InputStream(
-                        samplerate=16000, channels=1,
+                        samplerate=native_sr, channels=1,
                         dtype="float32", callback=_audio_cb
                     )
                     stream.start()
                     _rec["stream"] = stream
-                    print("[STT] PTT recording started…")
+                    print(f"[STT] PTT recording started… (mic={native_sr}Hz)")
                 except Exception as e:
                     await ws.send_text(json.dumps({
                         "type": "stt_result", "ok": False,
@@ -209,10 +220,12 @@ async def ws_endpoint(ws: WebSocket):
                 # Stop capture, save WAV, transcribe in thread
                 import numpy as np
                 from scipy.io import wavfile as scipy_wavfile
+                from scipy.signal import resample as scipy_resample
                 import time as _time
 
                 _rec["active"] = False
                 stream = _rec.get("stream")
+                native_sr = _rec.get("sample_rate", 16000)
                 _rec["stream"] = None
                 if stream:
                     try:
@@ -229,17 +242,23 @@ async def ws_endpoint(ws: WebSocket):
                         "type": "stt_result", "ok": False, "error": "No audio recorded"
                     }))
                 else:
-                    audio = np.concatenate(chunks, axis=0)
-                    duration_s = len(audio) / 16000
+                    audio = np.concatenate(chunks, axis=0).flatten()
+                    duration_s = len(audio) / native_sr
                     rms = float(np.sqrt(np.mean(audio ** 2)))
                     print(f"[STT] PTT stopped — {duration_s:.1f}s | RMS={rms:.4f}")
+
+                    # Resample to 16000 Hz for Whisper if mic used different rate
+                    if native_sr != 16000:
+                        target_len = int(len(audio) * 16000 / native_sr)
+                        audio = scipy_resample(audio, target_len).astype(np.float32)
+                        print(f"[STT] Resampled {native_sr}Hz → 16000Hz")
 
                     # Too quiet — mic not picking up audio at all
                     if rms < 0.001:
                         print("[STT] Audio is silent — mic may not be capturing")
                         await ws.send_text(json.dumps({
                             "type": "stt_result", "ok": False,
-                            "error": "Mic too quiet — check your default recording device in Windows Sound settings"
+                            "error": "Mic too quiet — open Windows Sound Settings → Recording tab → right-click your mic → Set as Default Device"
                         }))
                     # Too short — released Space before speaking
                     elif duration_s < 0.4:
