@@ -8,31 +8,38 @@ import time
 import tempfile
 from pathlib import Path
 
+# ── Model cache: load once, reuse on every call ──────────────────────────────
+_model_cache: dict = {}
 
 def _load_whisper_model(model_size: str):
     """
-    Load WhisperModel, preferring CUDA (GPU). Falls back to CPU automatically.
-    faster-whisper uses ctranslate2 which has its own CUDA support,
-    independent of whether torch is installed.
+    Load WhisperModel once and cache it for the lifetime of the process.
+    GPU: int8_float16 — fastest on modern NVIDIA cards (Ampere+).
+    CPU: int8 fallback.
     """
+    if model_size in _model_cache:
+        return _model_cache[model_size]
+
     from faster_whisper import WhisperModel
 
     download_root = os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
 
-    # Try GPU first
-    try:
-        model = WhisperModel(
-            model_size,
-            device="cuda",
-            compute_type="float16",
-            download_root=download_root
-        )
-        print(f"[STT] Loaded Whisper model: {model_size} (device: cuda, compute: float16)")
-        return model
-    except Exception as e:
-        print(f"[STT] CUDA unavailable ({e}), falling back to CPU")
+    # Try GPU with int8_float16 (fastest on Ampere/RTX cards)
+    for compute in ("int8_float16", "float16"):
+        try:
+            model = WhisperModel(
+                model_size,
+                device="cuda",
+                compute_type=compute,
+                download_root=download_root
+            )
+            print(f"[STT] Loaded Whisper model: {model_size} (device: cuda, compute: {compute})")
+            _model_cache[model_size] = model
+            return model
+        except Exception as e:
+            print(f"[STT] CUDA/{compute} unavailable: {e}")
 
-    # CPU fallback
+    # CPU int8 fallback
     model = WhisperModel(
         model_size,
         device="cpu",
@@ -40,43 +47,41 @@ def _load_whisper_model(model_size: str):
         download_root=download_root
     )
     print(f"[STT] Loaded Whisper model: {model_size} (device: cpu, compute: int8)")
+    _model_cache[model_size] = model
     return model
 
 
 def transcribe_audio(audio_path: str = None) -> dict:
     """
     Transcribe an audio file using faster-whisper. Completely local, no API keys.
-
-    Args:
-        audio_path: Path to audio file (wav, mp3, etc.)
-
-    Returns:
-        {"ok": True, "text": "transcribed text"} or {"ok": False, "error": "..."}
     """
     if audio_path is None:
         return {"ok": False, "error": "Audio path required."}
-
     if not os.path.exists(audio_path):
         return {"ok": False, "error": f"File not found: {audio_path}"}
 
     try:
-        model_size = os.getenv("WHISPER_MODEL", "base")
+        # tiny.en: fastest, English-only — perfect for voice commands
+        # Change WHISPER_MODEL env var to "base" or "small" for higher accuracy
+        model_size = os.getenv("WHISPER_MODEL", "tiny.en")
         model = _load_whisper_model(model_size)
 
+        t0 = time.time()
         print("[STT] Transcribing...")
         segments, info = model.transcribe(
             audio_path,
             language="en",
-            beam_size=5,
-            vad_filter=False   # VAD was too aggressive for short PTT clips
+            beam_size=1,        # greedy — instant, fine for conversational speech
+            vad_filter=False,   # VAD was too aggressive for short PTT clips
         )
 
-        full_text = " ".join([segment.text for segment in segments])
-        print(f"[STT] Done! Duration: {info.duration:.1f}s, Text: {full_text[:50]}...")
+        full_text = " ".join([seg.text for seg in segments]).strip()
+        elapsed = time.time() - t0
+        print(f"[STT] Done! {elapsed:.2f}s | audio={info.duration:.1f}s | text={full_text[:60]!r}")
 
         return {
             "ok": True,
-            "text": full_text.strip(),
+            "text": full_text,
             "language": info.language,
             "duration": info.duration,
             "model": model_size
@@ -95,12 +100,6 @@ def transcribe_audio(audio_path: str = None) -> dict:
 def transcribe_microphone(duration_seconds: float = 5.0) -> dict:
     """
     Record from microphone and transcribe. Completely local.
-
-    Args:
-        duration_seconds: How long to record (default 5 seconds)
-
-    Returns:
-        {"ok": True, "text": "transcribed text"}
     """
     try:
         import sounddevice as sd
