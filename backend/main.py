@@ -50,36 +50,32 @@ class TTSIn(BaseModel):
 
 @app.get("/")
 def root():
-    """Landing endpoint for browsers hitting the backend base URL."""
     return {
         "ok": True,
         "name": "J.A.R.V.I.S Backend",
         "mode": "LOCAL_ONLY",
-        "message": "Backend is running. Use the app UI or one of the API endpoints below.",
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
             "chat": "/chat",
             "websocket": "/ws",
-            "memory": "/memory"
+            "memory": "/memory",
+            "greeting": "/greeting"
         }
     }
 
 @app.get("/health")
 def health():
-    """Check backend health and capabilities"""
     import httpx
-    
-    # Check Ollama
     ollama_ok = False
     ollama_model = os.getenv("OLLAMA_MODEL", "unknown")
     try:
         resp = httpx.get(f"{os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434')}/api/tags", timeout=5)
         models = resp.json().get("models", [])
         ollama_ok = True
-    except:
+    except Exception:
         models = []
-    
+
     return {
         "ok": True,
         "status": "online",
@@ -88,15 +84,6 @@ def health():
             "connected": ollama_ok,
             "model": ollama_model,
             "available_models": [m.get("name", "unknown") for m in models[:5]]
-        },
-        "features": {
-            "llm": "✅ Ollama",
-            "stt": "⚠️ faster-whisper (needs setup)",
-            "tts": "✅ Windows SAPI",
-            "memory": "✅ ChromaDB",
-            "web_search": "✅ DuckDuckGo (free)",
-            "deep_research": "✅ Ollama + DuckDuckGo",
-            "screen_vision": "⚠️ Ollama vision model (needs llava)"
         },
         "config": {
             "ollama_host": os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
@@ -108,94 +95,93 @@ def health():
 # ============ CHAT ============
 @app.post("/chat")
 async def chat(inp: ChatIn):
-    """Non-streaming chat"""
     result = await agent.chat(inp.message)
     return result
 
 # ============ TTS ============
 @app.post("/tts")
 async def tts(inp: TTSIn):
-    """Convert text to speech (local TTS)"""
-    audio_path = tts_to_file(inp.text)
+    """Convert text to speech. Runs in thread so it doesn't block the event loop."""
+    loop = asyncio.get_event_loop()
+    audio_path = await loop.run_in_executor(None, tts_to_file, inp.text)
     if audio_path and os.path.exists(audio_path):
-        return {"ok": True, "audio_path": audio_path}
-    return {"ok": False, "error": "TTS failed - Windows SAPI not available?"}
+        filename = Path(audio_path).name
+        return {"ok": True, "audio_path": audio_path, "audio_url": f"/audio/{filename}"}
+    return {"ok": False, "error": "All TTS engines failed — check backend logs"}
 
 # ============ STT ============
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
-    """Transcribe uploaded audio file (local Whisper)"""
-    # Save uploaded file
-    temp_dir = Path(os.getenv("TEMP", "/tmp")) / "jarvis_stt"
+    temp_dir = Path(os.getenv("TEMP", tempfile.gettempdir())) / "jarvis_stt"
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_path = temp_dir / f"upload_{os.urandom(8).hex()}.wav"
-    
+
     with open(temp_path, "wb") as f:
         content = await file.read()
         f.write(content)
-    
-    result = transcribe_audio(str(temp_path))
-    
-    # Cleanup
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, transcribe_audio, str(temp_path))
+
     try:
         os.remove(temp_path)
-    except:
+    except Exception:
         pass
-    
+
     return result
 
 @app.post("/transcribe_mic")
-async def transcribe_mic(duration: float = Form(5.0)):
-    """Record and transcribe from microphone"""
-    return transcribe_microphone(duration)
+async def transcribe_mic_http(duration: float = Form(5.0)):
+    """HTTP fallback for mic transcription."""
+    import functools
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, functools.partial(transcribe_microphone, duration))
+    return result
 
 # ============ WEBSOCKET ============
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
-    """WebSocket for streaming chat + voice"""
     await ws.accept()
     try:
         while True:
             msg = await ws.receive_text()
             data = json.loads(msg)
-            
+
             if data.get("type") == "chat":
                 user_text = data.get("text", "")
                 await ws.send_text(json.dumps({"type": "status", "text": "thinking"}))
-                
+
                 full = ""
                 async for chunk in agent.stream_chat(user_text):
                     ctype = chunk.get("type")
-                    
                     if ctype == "delta":
                         full += chunk["text"]
                         await ws.send_text(json.dumps(chunk))
                     elif ctype in ("tool", "research_progress", "done"):
                         await ws.send_text(json.dumps(chunk))
-                    
-                    # Allow interruption
-                    try:
-                        await ws.send_text(json.dumps({"type": "keepalive"}))
-                    except:
-                        pass
-                
-                # TTS (local Windows SAPI)
+
+                # Generate TTS in a thread so the event loop stays free
                 if full.strip():
                     await ws.send_text(json.dumps({"type": "tts_start"}))
-                    audio_path = tts_to_file(full)
+                    loop = asyncio.get_event_loop()
+                    audio_path = await loop.run_in_executor(None, tts_to_file, full)
                     if audio_path and os.path.exists(audio_path):
                         await ws.send_text(json.dumps({"type": "tts", "path": audio_path}))
-            
+
             elif data.get("type") == "interrupt":
-                # User wants to stop current response
                 await ws.send_text(json.dumps({"type": "interrupted"}))
-            
+
             elif data.get("type") == "transcribe_mic":
-                # Microphone transcription
-                duration = data.get("duration", 5.0)
-                result = transcribe_microphone(duration)
+                # Run blocking mic recording + transcription in a thread
+                import functools
+                duration = float(data.get("duration", 5.0))
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, functools.partial(transcribe_microphone, duration)
+                )
+                print(f"[STT] Result: ok={result.get('ok')}, text={repr(result.get('text','')[:60])}")
                 await ws.send_text(json.dumps({"type": "stt_result", **result}))
-            
+
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -204,14 +190,12 @@ async def ws_endpoint(ws: WebSocket):
 # ============ MEMORY ============
 @app.get("/memory")
 async def memory_search(q: str = "", k: int = 5):
-    """Search memory"""
     from tools.memory_rag import memory_search as search
     results = search(q, k)
     return {"ok": True, "results": results}
 
 @app.post("/memory")
 async def memory_add(text: str = ""):
-    """Add to memory"""
     from tools.memory_rag import memory_add
     result = memory_add(text)
     return result
@@ -219,9 +203,10 @@ async def memory_add(text: str = ""):
 # ============ GREETING ============
 @app.get("/greeting")
 async def greeting():
-    """Generate a personalised JARVIS greeting using long-term memory + Ollama."""
+    """Personalised JARVIS startup greeting using long-term memory + Ollama."""
     from datetime import datetime
     from tools.memory_rag import memory_search as search
+    import functools
 
     hour = datetime.now().hour
     if hour < 5:
@@ -235,79 +220,76 @@ async def greeting():
     else:
         period = "night"
 
-    # Pull the most relevant user facts from memory
-    memories = search("user name preferences habits projects work", k=12)
+    # Run memory search in thread (ChromaDB is sync)
+    loop = asyncio.get_event_loop()
+    memories = await loop.run_in_executor(
+        None, functools.partial(search, "user name preferences habits projects work", 12)
+    )
     mem_lines = [m["text"] for m in memories if m.get("text")]
-
-    if mem_lines:
-        mem_block = "\n".join(f"- {l}" for l in mem_lines)
-    else:
-        mem_block = "(no memories stored yet — this may be the first session)"
+    mem_block = "\n".join(f"- {l}" for l in mem_lines) if mem_lines else \
+        "(no memories yet — first session)"
 
     prompt = f"""You are J.A.R.V.I.S., Tony Stark's AI assistant.
-Generate a single, personalised greeting for the user. It is currently {period}.
+Generate a single personalised greeting. It is currently {period}.
 
-Facts you know about the user from memory:
+Facts about the user:
 {mem_block}
 
 Rules:
-- Exactly 1–2 sentences. No more.
-- Do NOT start with "Good {period}" — be creative.
-- Reference something personal if memory has it (name, recent project, preference).
-- Slightly formal, witty, and warm — classic JARVIS tone.
-- End by subtly offering your assistance.
-- Output ONLY the greeting text, nothing else."""
+- 1-2 sentences only
+- Do NOT start with "Good {period}"
+- Reference something personal if memory has it
+- Classic JARVIS tone: formal, slightly witty
+- Output ONLY the greeting, nothing else."""
 
-    # Ask Ollama
     import httpx
     host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     model = os.getenv("OLLAMA_MODEL", "llama3.2")
     greeting_text = ""
     try:
-        resp = httpx.post(
-            f"{host}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.7, "num_predict": 80}},
-            timeout=20
+        resp = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: httpx.post(
+                    f"{host}/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": False,
+                          "options": {"temperature": 0.7, "num_predict": 80}},
+                    timeout=15
+                )
+            ),
+            timeout=18
         )
         greeting_text = resp.json().get("response", "").strip()
     except Exception as e:
         print(f"[Greeting] Ollama error: {e}")
 
-    # Fallback greetings when Ollama is unavailable or returns nothing
     if not greeting_text:
         fallbacks = {
-            "the early hours": "Running diagnostics at this ungodly hour, I see. All systems are online and ready for your instructions.",
-            "morning":   "Neural interface online. Systems nominal — whenever you're ready, I'm at your disposal.",
-            "afternoon": "All systems nominal. A productive afternoon awaits — what shall we tackle first?",
-            "evening":   "Evening protocols engaged. Systems are running smoothly — I'm here whenever you need me.",
-            "night":     "Burning the midnight oil again? All systems are online. Let's make it count.",
+            "the early hours": "Running diagnostics at this ungodly hour, I see. All systems online — at your disposal.",
+            "morning":   "Systems nominal and ready for the day. Whenever you are, so am I.",
+            "afternoon": "All systems nominal. A productive afternoon awaits — what shall we tackle?",
+            "evening":   "Evening protocols engaged. Systems running smoothly — I'm here when you need me.",
+            "night":     "Burning the midnight oil again? All systems online. Let's make it count.",
         }
         greeting_text = fallbacks.get(period, "Neural interface online. Always at your service.")
 
+    print(f"[Greeting] {period}: {greeting_text[:80]}")
     return {"ok": True, "greeting": greeting_text, "period": period, "memories": len(mem_lines)}
 
 # ============ MAIN ============
 if __name__ == "__main__":
     import uvicorn
-    
+
     port = int(os.getenv("JARVIS_PORT", "8765"))
     host = os.getenv("JARVIS_HOST", "127.0.0.1")
-    
+
     print("╔══════════════════════════════════════════════════════════╗")
     print("║           J.A.R.V.I.S Backend - LOCAL MODE               ║")
     print("╚══════════════════════════════════════════════════════════╝")
-    print("")
+    print()
     print(f"🚀 Starting at http://{host}:{port}")
     print(f"📋 Health check: http://{host}:{port}/health")
     print(f"🔌 WebSocket: ws://{host}:{port}/ws")
-    print("")
-    print("✅ Ollama for LLM")
-    print("⚠️  faster-whisper for STT (needs setup)")
-    print("✅ Windows SAPI for TTS")
-    print("✅ ChromaDB for memory")
-    print("✅ DuckDuckGo for web search")
-    print("✅ Ollama for deep research")
-    print("")
-    
+    print()
+
     uvicorn.run("main:app", host=host, port=port, reload=False)
