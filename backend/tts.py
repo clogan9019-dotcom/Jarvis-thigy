@@ -124,7 +124,18 @@ def tts_to_file(text: str) -> str | None:
         except Exception as e:
             print(f"[TTS] ElevenLabs failed: {e}")
 
-      2. gTTS British accent (free Google TTS, co.uk = British)
+    # ── 2. gTTS — British accent (Google TTS, free, needs internet) ────────────
+    try:
+        from gtts import gTTS as _gTTS
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
+        _gTTS(text=text, lang="en", tld="co.uk", slow=False).save(str(out_path))
+        if out_path.exists() and out_path.stat().st_size > 0:
+            print(f"[TTS] gTTS British → {out_path.name}")
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] gTTS failed: {e}")
+
+    # ── 3. Edge TTS ──────────────────────────────────────────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
         ok = asyncio.run(_edge_tts_async(text, str(out_path)))
