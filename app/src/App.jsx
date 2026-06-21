@@ -259,23 +259,28 @@ export default function App() {
     }
   }
 
-  /* ---------- Push-to-Talk: backend records + transcribes from mic ---------- */
-  const startPTT = useCallback((duration = 5.0) => {
+  /* ---------- Push-to-Talk: hold Space to record, release to transcribe ---------- */
+  const startPTT = useCallback(() => {
     if (listening) return
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ WebSocket not connected.' }])
       return
     }
     setListening(true)
-    wsRef.current.send(JSON.stringify({ type: 'transcribe_mic', duration }))
+    wsRef.current.send(JSON.stringify({ type: 'transcribe_mic_start' }))
+  }, [listening])
+
+  const stopPTT = useCallback(() => {
+    if (!listening) return
+    wsRef.current?.send(JSON.stringify({ type: 'transcribe_mic_stop' }))
   }, [listening])
 
   /* ---------- Keys ---------- */
   useEffect(() => {
     const down = (e) => {
-      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && !e.repeat) {
         e.preventDefault()
-        startPTT(5.0)
+        startPTT()
       }
       if (e.code === 'Tab') { e.preventDefault(); setShowHud(h => !h) }
       if (e.code === 'Backquote') { setShowDock(d => !d) }
@@ -285,9 +290,19 @@ export default function App() {
         wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
       }
     }
+    const up = (e) => {
+      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+        e.preventDefault()
+        stopPTT()
+      }
+    }
     window.addEventListener('keydown', down)
-    return () => window.removeEventListener('keydown', down)
-  }, [startPTT])
+    window.addEventListener('keyup', up)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+    }
+  }, [startPTT, stopPTT])
 
   const lastMsgs = msgs.slice(-3)
 
