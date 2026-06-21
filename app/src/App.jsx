@@ -107,9 +107,6 @@ export default function App() {
   })
 
   const wsRef = useRef(null)
-  const mediaRecorderRef = useRef(null)
-  const audioChunksRef = useRef([])
-  const isRecordingRef = useRef(false)
 
   useParticleSphere(canvasRef, speaking, listening, audioLevel)
 
@@ -133,15 +130,15 @@ export default function App() {
       })
   }, [])
 
-  /* ---------- Play TTS audio from backend path ---------- */
+  /* ---------- Play TTS audio served by backend ---------- */
   const playTtsAudio = useCallback((filePath) => {
     try {
       const filename = filePath.replace(/\\/g, '/').split('/').pop()
       const url = `${BACKEND}/audio/${filename}`
       const audio = new Audio(url)
-      audio.play().catch(e => console.warn('[TTS] Audio play failed:', e))
+      audio.play().catch(e => console.warn('[TTS] play failed:', e))
     } catch (e) {
-      console.warn('[TTS] playTtsAudio error:', e)
+      console.warn('[TTS] error:', e)
     }
   }, [])
 
@@ -151,8 +148,10 @@ export default function App() {
       try {
         const ws = new WebSocket(BACKEND.replace('http','ws') + '/ws')
         wsRef.current = ws
+
         ws.onmessage = (e) => {
           const d = JSON.parse(e.data)
+
           if (d.type === 'delta') {
             setSpeaking(true)
             const words = d.text.trim().split(/\s+/)
@@ -171,11 +170,24 @@ export default function App() {
               }
               return copy
             })
+
           } else if (d.type === 'tts_start') {
-            // backend is about to send audio
+            // backend is about to send TTS audio
+
           } else if (d.type === 'tts') {
-            // Play the generated audio file served via HTTP
+            // backend generated audio file — play it via the /audio HTTP endpoint
             if (d.path) playTtsAudio(d.path)
+
+          } else if (d.type === 'stt_result') {
+            // backend finished recording + transcribing from mic
+            setListening(false)
+            if (d.ok && d.text?.trim()) {
+              // send the transcribed text to the AI as a chat message
+              send(d.text.trim())
+            } else {
+              setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ STT: ${d.error || 'No speech detected'}` }])
+            }
+
           } else if (d.type === 'tool') {
             const isDeepResearch = d.name === 'deep_research'
             setResearch(r => ({
@@ -187,6 +199,7 @@ export default function App() {
               depth: r.depth,
               current_query: d.args?.topic || d.args?.query || ''
             }))
+
           } else if (d.type === 'research_progress') {
             setResearch({
               active: true,
@@ -197,6 +210,7 @@ export default function App() {
               depth: `${d.queries || 0} / 14`,
               current_query: d.current_query || ''
             })
+
           } else if (d.type === 'done') {
             setSpeaking(false)
             setSpeakWord('')
@@ -205,6 +219,7 @@ export default function App() {
             setTimeout(()=> setResearch(r => r.progress >= 100 ? {active:false, topic:'', queries:0, sources:0, progress:0, depth:'0 / 0', current_query:''} : r), 2200)
           }
         }
+
         ws.onclose = () => setTimeout(connect, 1800)
       } catch {}
     }
@@ -219,94 +234,49 @@ export default function App() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'chat', text }))
     } else {
-      fetch(BACKEND + '/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:text})})
-        .then(r=>r.json()).then(j => {
+      fetch(BACKEND + '/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text })
+      })
+        .then(r => r.json())
+        .then(j => {
           setMsgs(m => [...m, { who: 'JARVIS', text: j.reply || '(backend offline)' }])
           setSpeaking(false)
-        }).catch(()=> setSpeaking(false))
+        })
+        .catch(() => setSpeaking(false))
     }
   }
 
-  /* ---------- Push-to-Talk (Space) microphone recording ---------- */
-  const startRecording = useCallback(async () => {
-    if (isRecordingRef.current) return
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      audioChunksRef.current = []
-      const recorder = new MediaRecorder(stream)
-      mediaRecorderRef.current = recorder
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data)
-      }
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        if (blob.size < 1000) return // too short, ignore
-
-        setMsgs(m => [...m, { who: 'JARVIS', text: '🎙️ Transcribing…', streaming: true }])
-
-        try {
-          const formData = new FormData()
-          formData.append('file', blob, 'recording.webm')
-          const res = await fetch(BACKEND + '/transcribe', { method: 'POST', body: formData })
-          const data = await res.json()
-
-          // Remove the "Transcribing…" placeholder
-          setMsgs(m => m.filter(x => x.text !== '🎙️ Transcribing…'))
-
-          if (data.ok && data.text?.trim()) {
-            send(data.text.trim())
-          } else {
-            setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ STT failed: ${data.error || 'No speech detected'}` }])
-          }
-        } catch (err) {
-          setMsgs(m => m.filter(x => x.text !== '🎙️ Transcribing…'))
-          setMsgs(m => [...m, { who: 'JARVIS', text: `⚠️ Transcription error: ${err.message}` }])
-        }
-      }
-
-      recorder.start()
-      isRecordingRef.current = true
-      setListening(true)
-    } catch (err) {
-      console.error('[PTT] Mic error:', err)
-      setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Microphone access denied. Check browser permissions.' }])
+  /* ---------- Push-to-Talk: asks the backend to record + transcribe ---------- */
+  const startPTT = useCallback((duration = 5.0) => {
+    if (listening) return
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ WebSocket not connected.' }])
+      return
     }
-  }, [])
-
-  const stopRecording = useCallback(() => {
-    if (!isRecordingRef.current) return
-    isRecordingRef.current = false
-    setListening(false)
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop()
-    }
-  }, [])
+    setListening(true)
+    wsRef.current.send(JSON.stringify({ type: 'transcribe_mic', duration }))
+  }, [listening])
 
   /* ---------- Keys ---------- */
   useEffect(() => {
     const down = (e) => {
       if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
         e.preventDefault()
-        startRecording()
+        startPTT(5.0)
       }
       if (e.code === 'Tab') { e.preventDefault(); setShowHud(h => !h) }
       if (e.code === 'Backquote') { setShowDock(d => !d) }
       if (e.code === 'Escape') {
         setSpeaking(false)
-        stopRecording()
-        wsRef.current?.send(JSON.stringify({type:'interrupt'}))
+        setListening(false)
+        wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
       }
     }
-    const up = (e) => {
-      if (e.code === 'Space') stopRecording()
-    }
     window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
-  }, [startRecording, stopRecording])
+    return () => window.removeEventListener('keydown', down)
+  }, [startPTT])
 
   const lastMsgs = msgs.slice(-3)
 
@@ -328,7 +298,7 @@ export default function App() {
       <div className="stage">
         <canvas id="particleCanvas" ref={canvasRef} style={{width:'100%',height:'100%'}} />
         <div className="mic-ring" style={{opacity: listening ? 1 : 0}} />
-        
+
         <div className="speak-word-wrap">
           <div className="speak-word">{speakWord}</div>
         </div>
