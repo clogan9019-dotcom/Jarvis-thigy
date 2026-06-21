@@ -135,7 +135,32 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] gTTS failed: {e}")
 
-    # ── 3. Edge TTS ──────────────────────────────────────────────────────────────
+    # ── 3. Piper TTS — offline British male voice (downloads model on first use) ─
+    try:
+        import wave, urllib.request
+        from piper.voice import PiperVoice
+        model_dir = Path(os.getenv("APPDATA", ".")) / "jarvis" / "piper_voices"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model_file = model_dir / "en_GB-alan-medium.onnx"
+        config_file = model_dir / "en_GB-alan-medium.onnx.json"
+        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium"
+        if not model_file.exists():
+            print("[TTS] Piper: downloading en_GB-alan-medium model (~60MB)...")
+            urllib.request.urlretrieve(f"{base_url}/en_GB-alan-medium.onnx", model_file)
+            urllib.request.urlretrieve(f"{base_url}/en_GB-alan-medium.onnx.json", config_file)
+            print("[TTS] Piper model downloaded.")
+        voice = PiperVoice.load(str(model_file), config_path=str(config_file), use_cuda=False)
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
+        with wave.open(str(out_path), "wb") as wf:
+            voice.synthesize(text, wf)
+        if out_path.exists() and out_path.stat().st_size > 0:
+            print(f"[TTS] Piper (alan-GB) → {out_path.name}")
+            _apply_jarvis_effect(str(out_path))
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] Piper TTS failed: {e}")
+
+    # ── 4. Edge TTS ──────────────────────────────────────────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
         ok = asyncio.run(_edge_tts_async(text, str(out_path)))
@@ -145,7 +170,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Edge TTS error: {e}")
 
-    # ── 4. PowerShell SAPI (no Python deps needed) ───────────────────────────
+    # ── 5. PowerShell SAPI (no Python deps needed) ───────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         safe_text = _escape_ps(text)
@@ -181,7 +206,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] PowerShell SAPI error: {e}")
 
-    # ── 5. win32com SAPI ─────────────────────────────────────────────────────
+    # ── 6. win32com SAPI ─────────────────────────────────────────────────────
     try:
         import win32com.client
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
@@ -203,7 +228,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] win32com SAPI failed: {e}")
 
-    # ── 6. pyttsx3 ───────────────────────────────────────────────────────────
+    # ── 7. pyttsx3 ───────────────────────────────────────────────────────────
     try:
         import pyttsx3
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
