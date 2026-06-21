@@ -223,7 +223,31 @@ class JarvisAgent:
                             else:
                                 result = fn(**args) if args else fn()
 
-                            result_str = json.dumps(result, default=str)[:4000]
+                            # For deep_research: give LLM a brief directive only
+                            # (full report is on disk — don't make it yap the whole thing)
+                            if name == "deep_research" and result.get("ok"):
+                                report_path = result.get("report_path", "")
+                                brief = (result.get("summary") or "")[:300]
+                                if report_path:
+                                    try:
+                                        import subprocess as _sp
+                                        _sp.Popen(["notepad.exe", report_path])
+                                    except Exception:
+                                        pass
+                                result_str = (
+                                    f"Research complete.\n"
+                                    f"Report saved to: {report_path}\n"
+                                    f"Stats: {result.get('queries_count',0)} queries, "
+                                    f"{result.get('sources_found',0)} sources, "
+                                    f"{result.get('elapsed_sec',0)}s\n"
+                                    f"Opening in Notepad.\n"
+                                    f"Excerpt: {brief}\n\n"
+                                    "JARVIS INSTRUCTION: Tell the user the report is saved and opened. "
+                                    "Give exactly ONE sentence summary of the key finding. "
+                                    "Do NOT list bullet points or repeat the full report."
+                                )
+                            else:
+                                result_str = json.dumps(result, default=str)[:4000]
                         else:
                             result_str = f"Unknown tool: {name}"
                             result = {"ok": False}
