@@ -40,6 +40,24 @@ class TTSIn(BaseModel):
     text: str
 
 # ============ HEALTH ============
+
+@app.get("/")
+def root():
+    """Landing endpoint for browsers hitting the backend base URL."""
+    return {
+        "ok": True,
+        "name": "J.A.R.V.I.S Backend",
+        "mode": "LOCAL_ONLY",
+        "message": "Backend is running. Use the app UI or one of the API endpoints below.",
+        "endpoints": {
+            "health": "/health",
+            "docs": "/docs",
+            "chat": "/chat",
+            "websocket": "/ws",
+            "memory": "/memory"
+        }
+    }
+
 @app.get("/health")
 def health():
     """Check backend health and capabilities"""
