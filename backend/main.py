@@ -11,14 +11,13 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from llm_agent import JarvisAgent
 from stt import transcribe_audio, transcribe_microphone
 from tts import tts_to_file
+from frontend import register_frontend
 
 load_dotenv()
 
@@ -31,17 +30,9 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+register_frontend(app)
+
 agent = JarvisAgent()
-
-BACKEND_DIR = Path(__file__).resolve().parent
-REPO_ROOT = BACKEND_DIR.parent
-APP_DIST_DIR = REPO_ROOT / "app" / "dist"
-APP_DIST_INDEX = APP_DIST_DIR / "index.html"
-PREVIEW_INDEX = REPO_ROOT / "index.html"
-
-if (APP_DIST_DIR / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=APP_DIST_DIR / "assets"), name="frontend-assets")
-
 
 # ============ MODELS ============
 class ChatIn(BaseModel):
@@ -52,28 +43,6 @@ class TTSIn(BaseModel):
     text: str
 
 # ============ HEALTH ============
-
-@app.get("/", include_in_schema=False)
-def root():
-    """Serve the J.A.R.V.I.S HUD when the backend base URL is opened."""
-    if APP_DIST_INDEX.exists():
-        return FileResponse(APP_DIST_INDEX)
-    if PREVIEW_INDEX.exists():
-        return FileResponse(PREVIEW_INDEX)
-
-    return {
-        "ok": True,
-        "name": "J.A.R.V.I.S Backend",
-        "mode": "LOCAL_ONLY",
-        "message": "Backend is running, but no HUD build was found. Run `npm run build` in app/ or open /docs.",
-        "endpoints": {
-            "health": "/health",
-            "docs": "/docs",
-            "chat": "/chat",
-            "websocket": "/ws",
-            "memory": "/memory"
-        }
-    }
 
 @app.get("/health")
 def health():
