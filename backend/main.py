@@ -230,20 +230,35 @@ async def ws_endpoint(ws: WebSocket):
                 else:
                     audio = np.concatenate(chunks, axis=0)
                     duration_s = len(audio) / 16000
-                    print(f"[STT] PTT stopped — {duration_s:.1f}s recorded, transcribing…")
+                    rms = float(np.sqrt(np.mean(audio ** 2)))
+                    print(f"[STT] PTT stopped — {duration_s:.1f}s | RMS={rms:.4f}")
 
-                    stt_dir = Path(tempfile.gettempdir()) / "jarvis_stt"
-                    stt_dir.mkdir(parents=True, exist_ok=True)
-                    tmp_wav = stt_dir / f"ptt_{int(_time.time())}.wav"
-                    scipy_wavfile.write(str(tmp_wav), 16000,
-                                        (audio * 32767).astype(np.int16))
+                    # Too quiet — mic not picking up audio at all
+                    if rms < 0.001:
+                        print("[STT] Audio is silent — mic may not be capturing")
+                        await ws.send_text(json.dumps({
+                            "type": "stt_result", "ok": False,
+                            "error": "Mic too quiet — check your default recording device in Windows Sound settings"
+                        }))
+                    # Too short — released Space before speaking
+                    elif duration_s < 0.4:
+                        await ws.send_text(json.dumps({
+                            "type": "stt_result", "ok": False,
+                            "error": "Hold Space while you speak, then release"
+                        }))
+                    else:
+                        stt_dir = Path(tempfile.gettempdir()) / "jarvis_stt"
+                        stt_dir.mkdir(parents=True, exist_ok=True)
+                        tmp_wav = stt_dir / f"ptt_{int(_time.time())}.wav"
+                        scipy_wavfile.write(str(tmp_wav), 16000,
+                                            (audio * 32767).astype(np.int16))
 
-                    loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(
-                        None, transcribe_audio, str(tmp_wav)
-                    )
-                    print(f"[STT] Result: ok={result.get('ok')}, text={repr(result.get('text','')[:60])}")
-                    await ws.send_text(json.dumps({"type": "stt_result", **result}))
+                        loop = asyncio.get_event_loop()
+                        result = await loop.run_in_executor(
+                            None, transcribe_audio, str(tmp_wav)
+                        )
+                        print(f"[STT] Result: ok={result.get('ok')}, text={repr(result.get('text','')[:60])}")
+                        await ws.send_text(json.dumps({"type": "stt_result", **result}))
 
     except WebSocketDisconnect:
         pass
