@@ -14,26 +14,27 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DOWNLOADS_DIR  = Path.home() / "Jarvis" / "downloads"
+DOWNLOADS_DIR   = Path.home() / "Jarvis" / "downloads"
 SCREENSHOTS_DIR = Path.home() / "Jarvis" / "screenshots"
+
 
 def _ensure_dirs():
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+
 # ── Singleton browser state (one per process, thread-safe via lock) ───────────
-_lock      = threading.Lock()
-_pw        = None   # Playwright instance
-_browser   = None   # Browser instance
-_context   = None   # BrowserContext
-_page      = None   # Active Page
+_lock     = threading.Lock()
+_pw       = None   # Playwright instance
+_browser  = None   # Browser instance
+_context  = None   # BrowserContext
+_active_page = None  # Currently active Page  (named _active_page to avoid shadowing)
 
 
-def _get_or_launch(headless: bool = False):
-    """Return the active page, launching browser/context/page if needed."""
-    global _pw, _browser, _context, _page
+def _get_page(headless: bool = False):
+    """Return the active Page, launching browser/context/page if needed."""
+    global _pw, _browser, _context, _active_page
     with _lock:
-        # Import here so missing playwright gives a clear error per-call
         from playwright.sync_api import sync_playwright
 
         if _pw is None:
@@ -62,16 +63,11 @@ def _get_or_launch(headless: bool = False):
                 ),
             )
 
-        if _page is None or _page.is_closed():
+        if _active_page is None or _active_page.is_closed():
             pages = _context.pages
-            _page = pages[0] if pages else _context.new_page()
+            _active_page = pages[0] if pages else _context.new_page()
 
-        return _page
-
-
-def _page():
-    """Shorthand: get the current page (launching if needed)."""
-    return _get_or_launch()
+        return _active_page
 
 
 # ═══════════════════════════════════════════════════════════
@@ -81,7 +77,7 @@ def _page():
 def browser_open(url: str, wait_until: str = "domcontentloaded") -> dict:
     """Navigate to a URL. Opens the browser if not already running."""
     try:
-        p = _get_or_launch()
+        p = _get_page()
         if not url.startswith("http"):
             url = "https://" + url
         p.goto(url, wait_until=wait_until, timeout=30000)
@@ -92,7 +88,7 @@ def browser_open(url: str, wait_until: str = "domcontentloaded") -> dict:
 
 def browser_back() -> dict:
     try:
-        p = _page()
+        p = _get_page()
         p.go_back(wait_until="domcontentloaded", timeout=10000)
         return {"ok": True, "url": p.url, "title": p.title()}
     except Exception as e:
@@ -101,7 +97,7 @@ def browser_back() -> dict:
 
 def browser_forward() -> dict:
     try:
-        p = _page()
+        p = _get_page()
         p.go_forward(wait_until="domcontentloaded", timeout=10000)
         return {"ok": True, "url": p.url, "title": p.title()}
     except Exception as e:
@@ -110,7 +106,7 @@ def browser_forward() -> dict:
 
 def browser_refresh() -> dict:
     try:
-        p = _page()
+        p = _get_page()
         p.reload(wait_until="domcontentloaded", timeout=15000)
         return {"ok": True, "url": p.url, "title": p.title()}
     except Exception as e:
@@ -119,7 +115,7 @@ def browser_refresh() -> dict:
 
 def browser_get_url() -> dict:
     try:
-        p = _page()
+        p = _get_page()
         return {"ok": True, "url": p.url, "title": p.title()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -130,11 +126,12 @@ def browser_get_url() -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def browser_new_tab(url: str = "about:blank") -> dict:
-    global _page
+    global _active_page
     try:
         with _lock:
+            _get_page()  # ensure browser/context exists
             new_p = _context.new_page()
-            _page = new_p
+            _active_page = new_p
         if url and url != "about:blank":
             nav_url = url if url.startswith("http") else "https://" + url
             new_p.goto(nav_url, wait_until="domcontentloaded", timeout=30000)
@@ -157,7 +154,10 @@ def browser_list_tabs() -> dict:
         tabs = []
         for i, pg in enumerate(_context.pages):
             try:
-                tabs.append({"index": i, "url": pg.url, "title": pg.title(), "active": pg == _page})
+                tabs.append({
+                    "index": i, "url": pg.url,
+                    "title": pg.title(), "active": pg == _active_page
+                })
             except Exception:
                 tabs.append({"index": i, "url": "unknown", "title": "unknown", "active": False})
         return {"ok": True, "tabs": tabs}
@@ -166,57 +166,57 @@ def browser_list_tabs() -> dict:
 
 
 def browser_switch_tab(index: int) -> dict:
-    global _page
+    global _active_page
     try:
         if _context is None:
             return {"ok": False, "error": "No browser open"}
         tabs = _context.pages
         if index < 0 or index >= len(tabs):
-            return {"ok": False, "error": f"Tab index {index} out of range (0-{len(tabs)-1})"}
+            return {"ok": False, "error": f"Tab index {index} out of range (0–{len(tabs)-1})"}
         with _lock:
-            _page = tabs[index]
-        _page.bring_to_front()
-        return {"ok": True, "url": _page.url, "title": _page.title()}
+            _active_page = tabs[index]
+        _active_page.bring_to_front()
+        return {"ok": True, "url": _active_page.url, "title": _active_page.title()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def browser_close_tab(index: int = -1) -> dict:
-    global _page
+    global _active_page
     try:
         if _context is None:
             return {"ok": False, "error": "No browser open"}
         tabs = _context.pages
         if not tabs:
             return {"ok": False, "error": "No tabs open"}
-        tab = tabs[index] if index >= 0 else _page
+        tab = tabs[index] if index >= 0 else _active_page
         tab.close()
         remaining = _context.pages
         if remaining:
             with _lock:
-                _page = remaining[-1]
-            _page.bring_to_front()
-            return {"ok": True, "remaining_tabs": len(remaining), "current_url": _page.url}
+                _active_page = remaining[-1]
+            _active_page.bring_to_front()
+            return {"ok": True, "remaining_tabs": len(remaining), "current_url": _active_page.url}
         with _lock:
-            _page = None
+            _active_page = None
         return {"ok": True, "remaining_tabs": 0}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def browser_close() -> dict:
-    global _pw, _browser, _context, _page
+    global _pw, _browser, _context, _active_page
     try:
         with _lock:
             if _browser:
                 _browser.close()
             if _pw:
                 _pw.stop()
-            _pw = _browser = _context = _page = None
+            _pw = _browser = _context = _active_page = None
         return {"ok": True, "message": "Browser closed"}
     except Exception as e:
         with _lock:
-            _pw = _browser = _context = _page = None
+            _pw = _browser = _context = _active_page = None
         return {"ok": False, "error": str(e)}
 
 
@@ -234,7 +234,7 @@ def browser_click(
 ) -> dict:
     """Click by CSS selector, XPath, text ('text=Sign in'), or x/y coords."""
     try:
-        p = _page()
+        p = _get_page()
         if x is not None and y is not None:
             if double:
                 p.mouse.dblclick(x, y)
@@ -261,7 +261,7 @@ def browser_hover(
     selector: str = None, x: int = None, y: int = None, timeout: int = 10000
 ) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if x is not None and y is not None:
             p.mouse.move(x, y)
             return {"ok": True, "hovered": f"({x}, {y})"}
@@ -282,7 +282,7 @@ def browser_drag(
     to_y: int = None,
 ) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if from_x is not None and to_x is not None:
             p.mouse.move(from_x, from_y)
             p.mouse.down()
@@ -309,7 +309,7 @@ def browser_type(
     timeout: int = 10000,
 ) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         el = p.locator(selector).first
         el.wait_for(state="visible", timeout=timeout)
         if clear_first:
@@ -330,7 +330,7 @@ def browser_press_key(key: str, selector: str = None) -> dict:
     """Press a key globally or on a specific element.
     Examples: 'Enter', 'Escape', 'Tab', 'Control+a', 'Control+c'"""
     try:
-        p = _page()
+        p = _get_page()
         if selector:
             p.locator(selector).first.press(key)
         else:
@@ -342,8 +342,7 @@ def browser_press_key(key: str, selector: str = None) -> dict:
 
 def browser_clear_input(selector: str, timeout: int = 10000) -> dict:
     try:
-        p = _page()
-        p.locator(selector).first.clear(timeout=timeout)
+        _get_page().locator(selector).first.clear(timeout=timeout)
         return {"ok": True, "cleared": selector}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -357,7 +356,7 @@ def browser_select_option(
     timeout: int = 10000,
 ) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         el = p.locator(selector).first
         if value is not None:
             el.select_option(value=value, timeout=timeout)
@@ -375,7 +374,7 @@ def browser_select_option(
 
 def browser_check(selector: str, timeout: int = 10000) -> dict:
     try:
-        _page().locator(selector).first.check(timeout=timeout)
+        _get_page().locator(selector).first.check(timeout=timeout)
         return {"ok": True, "checked": selector}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -383,7 +382,7 @@ def browser_check(selector: str, timeout: int = 10000) -> dict:
 
 def browser_uncheck(selector: str, timeout: int = 10000) -> dict:
     try:
-        _page().locator(selector).first.uncheck(timeout=timeout)
+        _get_page().locator(selector).first.uncheck(timeout=timeout)
         return {"ok": True, "unchecked": selector}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -398,7 +397,7 @@ def browser_scroll(
 ) -> dict:
     """direction: 'up' | 'down' | 'left' | 'right' | 'top' | 'bottom'"""
     try:
-        p = _page()
+        p = _get_page()
         if direction == "top":
             p.evaluate("window.scrollTo(0, 0)")
         elif direction == "bottom":
@@ -418,7 +417,7 @@ def browser_scroll(
 
 def browser_scroll_to_element(selector: str) -> dict:
     try:
-        _page().locator(selector).first.scroll_into_view_if_needed()
+        _get_page().locator(selector).first.scroll_into_view_if_needed()
         return {"ok": True, "scrolled_to": selector}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -430,10 +429,9 @@ def browser_scroll_to_element(selector: str) -> dict:
 
 def browser_get_text(selector: str = None) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if selector:
-            text = p.locator(selector).first.inner_text()
-            return {"ok": True, "text": text}
+            return {"ok": True, "text": p.locator(selector).first.inner_text()}
         text = p.evaluate("""
             () => {
                 const el = document.body.cloneNode(true);
@@ -449,7 +447,7 @@ def browser_get_text(selector: str = None) -> dict:
 
 def browser_get_html(selector: str = None, outer: bool = False) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if selector:
             el = p.locator(selector).first
             html = el.outer_html() if outer else el.inner_html()
@@ -462,16 +460,15 @@ def browser_get_html(selector: str = None, outer: bool = False) -> dict:
 
 def browser_find_elements(selector: str, attributes: List[str] = None) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         locator = p.locator(selector)
         count = locator.count()
         items = []
-        attrs = attributes or []
         for i in range(min(count, 50)):
             el = locator.nth(i)
             try:
                 item = {"index": i, "text": el.inner_text().strip()[:200]}
-                for attr in attrs:
+                for attr in (attributes or []):
                     try:
                         item[attr] = el.get_attribute(attr)
                     except Exception:
@@ -486,7 +483,7 @@ def browser_find_elements(selector: str, attributes: List[str] = None) -> dict:
 
 def browser_get_attribute(selector: str, attribute: str, timeout: int = 10000) -> dict:
     try:
-        value = _page().locator(selector).first.get_attribute(attribute, timeout=timeout)
+        value = _get_page().locator(selector).first.get_attribute(attribute, timeout=timeout)
         return {"ok": True, "selector": selector, "attribute": attribute, "value": value}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -494,7 +491,7 @@ def browser_get_attribute(selector: str, attribute: str, timeout: int = 10000) -
 
 def browser_get_value(selector: str, timeout: int = 10000) -> dict:
     try:
-        value = _page().locator(selector).first.input_value(timeout=timeout)
+        value = _get_page().locator(selector).first.input_value(timeout=timeout)
         return {"ok": True, "selector": selector, "value": value}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -505,14 +502,9 @@ def browser_get_value(selector: str, timeout: int = 10000) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def browser_execute_js(script: str, arg: Any = None) -> dict:
-    """Run any JavaScript on the page and return the result.
-    Examples:
-      browser_execute_js("document.title")
-      browser_execute_js("window.scrollY")
-      browser_execute_js("document.querySelector('#price').textContent")
-    """
+    """Run any JavaScript on the page and return the result."""
     try:
-        p = _page()
+        p = _get_page()
         if arg is not None:
             result = p.evaluate(f"(arg) => {{ return {script} }}", arg)
         else:
@@ -523,9 +515,8 @@ def browser_execute_js(script: str, arg: Any = None) -> dict:
 
 
 def browser_inject_js(script: str) -> dict:
-    """Inject a script tag into the page (side-effects, no return value needed)."""
     try:
-        _page().add_script_tag(content=script)
+        _get_page().add_script_tag(content=script)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -536,11 +527,11 @@ def browser_inject_js(script: str) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def browser_fill_form(fields: Dict[str, str], submit_selector: str = None) -> dict:
-    """Fill multiple fields at once and optionally submit.
+    """Fill multiple fields and optionally submit.
     fields: {selector: value}  e.g. {"#email": "me@x.com", "#pass": "secret"}
     """
     try:
-        p = _page()
+        p = _get_page()
         filled, errors = [], []
         for selector, value in fields.items():
             try:
@@ -581,7 +572,7 @@ def browser_upload_file(selector: str, file_path: str, timeout: int = 10000) -> 
         path = Path(file_path).expanduser()
         if not path.exists():
             return {"ok": False, "error": f"File not found: {file_path}"}
-        _page().locator(selector).first.set_input_files(str(path), timeout=timeout)
+        _get_page().locator(selector).first.set_input_files(str(path), timeout=timeout)
         return {"ok": True, "uploaded": str(path)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -594,20 +585,18 @@ def browser_upload_file(selector: str, file_path: str, timeout: int = 10000) -> 
 def browser_screenshot(
     selector: str = None, filename: str = None, full_page: bool = False
 ) -> dict:
-    """Screenshot the page or a specific element. Saves to ~/Jarvis/screenshots/."""
+    """Screenshot the page or an element. Saves to ~/Jarvis/screenshots/."""
     try:
         _ensure_dirs()
-        p = _page()
+        p = _get_page()
         name = filename or f"screenshot_{int(time.time())}.png"
         if not name.endswith(".png"):
             name += ".png"
         path = SCREENSHOTS_DIR / name
-
         if selector:
             p.locator(selector).first.screenshot(path=str(path))
         else:
             p.screenshot(path=str(path), full_page=full_page)
-
         return {"ok": True, "path": str(path), "url": p.url, "full_page": full_page}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -624,7 +613,7 @@ def browser_wait_for(
     timeout: int = 15000,
 ) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if url_pattern:
             import re as _re
             p.wait_for_url(_re.compile(url_pattern), timeout=timeout)
@@ -640,7 +629,7 @@ def browser_wait_for(
 
 def browser_wait_ms(ms: int = 1000) -> dict:
     try:
-        _page().wait_for_timeout(ms)
+        _get_page().wait_for_timeout(ms)
         return {"ok": True, "waited_ms": ms}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -664,13 +653,10 @@ def browser_set_cookie(
     name: str, value: str, domain: str = None, path: str = "/", secure: bool = False
 ) -> dict:
     try:
-        p = _get_or_launch()
+        p = _get_page()
         from urllib.parse import urlparse
         cookie = {
-            "name": name,
-            "value": value,
-            "path": path,
-            "secure": secure,
+            "name": name, "value": value, "path": path, "secure": secure,
             "domain": domain or urlparse(p.url).hostname or "localhost",
         }
         _context.add_cookies([cookie])
@@ -691,7 +677,7 @@ def browser_clear_cookies() -> dict:
 
 def browser_get_local_storage(key: str = None) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         if key:
             val = p.evaluate(f"localStorage.getItem('{key}')")
             return {"ok": True, "key": key, "value": val}
@@ -703,7 +689,7 @@ def browser_get_local_storage(key: str = None) -> dict:
 
 def browser_set_local_storage(key: str, value: str) -> dict:
     try:
-        _page().evaluate(f"localStorage.setItem('{key}', '{value}')")
+        _get_page().evaluate(f"localStorage.setItem('{key}', '{value}')")
         return {"ok": True, "set": key}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -717,7 +703,7 @@ def browser_download(url: str, filename: str = None) -> dict:
     """Download a file. Saves to ~/Jarvis/downloads/."""
     try:
         _ensure_dirs()
-        p = _page()
+        p = _get_page()
         nav_url = url if url.startswith("http") else "https://" + url
         with p.expect_download() as dl_info:
             p.goto(nav_url)
@@ -731,19 +717,17 @@ def browser_download(url: str, filename: str = None) -> dict:
 
 
 def browser_intercept_next_request(url_pattern: str = "**/*") -> dict:
-    """Capture the next network response matching url_pattern."""
+    """Capture the next network response."""
     try:
-        p = _page()
+        p = _get_page()
         captured = {}
 
         def handle(response):
             if not captured:
                 try:
                     captured.update({
-                        "url": response.url,
-                        "status": response.status,
-                        "headers": dict(response.headers),
-                        "body": response.text()[:5000],
+                        "url": response.url, "status": response.status,
+                        "headers": dict(response.headers), "body": response.text()[:5000],
                     })
                 except Exception:
                     pass
@@ -757,33 +741,25 @@ def browser_intercept_next_request(url_pattern: str = "**/*") -> dict:
 
 
 # ═══════════════════════════════════════════════════════════
-#  DIALOGS & POPUPS
+#  DIALOGS & FRAMES
 # ═══════════════════════════════════════════════════════════
 
 def browser_handle_dialog(action: str = "accept", text: str = "") -> dict:
-    """Configure how the NEXT alert/confirm/prompt is handled."""
     try:
-        p = _page()
-
         def _handler(dialog):
             if action == "accept":
                 dialog.accept(text or "")
             else:
                 dialog.dismiss()
-
-        p.once("dialog", _handler)
+        _get_page().once("dialog", _handler)
         return {"ok": True, "configured": action}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-# ═══════════════════════════════════════════════════════════
-#  FRAMES & IFRAMES
-# ═══════════════════════════════════════════════════════════
-
 def browser_get_frames() -> dict:
     try:
-        p = _page()
+        p = _get_page()
         frames = [{"index": i, "name": f.name, "url": f.url} for i, f in enumerate(p.frames)]
         return {"ok": True, "frames": frames}
     except Exception as e:
@@ -792,12 +768,11 @@ def browser_get_frames() -> dict:
 
 def browser_frame_execute_js(frame_index: int, script: str) -> dict:
     try:
-        p = _page()
+        p = _get_page()
         frames = p.frames
         if frame_index >= len(frames):
             return {"ok": False, "error": f"Frame {frame_index} not found (total: {len(frames)})"}
-        result = frames[frame_index].evaluate(script)
-        return {"ok": True, "result": result}
+        return {"ok": True, "result": frames[frame_index].evaluate(script)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -807,32 +782,26 @@ def browser_frame_execute_js(frame_index: int, script: str) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def browser_get_page_info() -> dict:
-    """Get title, URL, links, inputs, and meta tags for the current page."""
     try:
-        p = _page()
+        p = _get_page()
         info = p.evaluate("""
         () => {
-            const links = Array.from(document.querySelectorAll('a[href]'))
-                .slice(0, 30)
+            const links = Array.from(document.querySelectorAll('a[href]')).slice(0,30)
                 .map(a => ({text: a.innerText.trim().slice(0,80), href: a.href}));
-            const inputs = Array.from(document.querySelectorAll('input, textarea, select'))
-                .slice(0, 20)
+            const inputs = Array.from(document.querySelectorAll('input,textarea,select')).slice(0,20)
                 .map(el => ({
-                    tag: el.tagName.toLowerCase(),
-                    type: el.type || null,
-                    id: el.id || null,
-                    name: el.name || null,
-                    placeholder: el.placeholder || null,
-                    value: (el.type !== 'password' ? el.value : '***') || null
+                    tag: el.tagName.toLowerCase(), type: el.type||null,
+                    id: el.id||null, name: el.name||null,
+                    placeholder: el.placeholder||null,
+                    value: (el.type!=='password' ? el.value : '***')||null
                 }));
             const meta = {};
-            document.querySelectorAll('meta[name], meta[property]').forEach(m => {
-                const k = m.getAttribute('name') || m.getAttribute('property');
-                meta[k] = m.getAttribute('content');
+            document.querySelectorAll('meta[name],meta[property]').forEach(m => {
+                meta[m.getAttribute('name')||m.getAttribute('property')] = m.getAttribute('content');
             });
             return { title: document.title, links, inputs,
                      forms: document.forms.length, images: document.images.length,
-                     description: meta['description'] || meta['og:description'] || null };
+                     description: meta['description']||meta['og:description']||null };
         }
         """)
         info["url"] = p.url
@@ -842,16 +811,14 @@ def browser_get_page_info() -> dict:
 
 
 def browser_highlight(selector: str, color: str = "red", duration_ms: int = 2000) -> dict:
-    """Visually outline an element for debugging."""
     try:
-        p = _page()
-        p.evaluate(f"""
+        _get_page().evaluate(f"""
         () => {{
             const el = document.querySelector('{selector}');
             if (!el) return;
             const orig = el.style.outline;
             el.style.outline = '4px solid {color}';
-            el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+            el.scrollIntoView({{behavior:'smooth',block:'center'}});
             setTimeout(() => el.style.outline = orig, {duration_ms});
         }}
         """)
