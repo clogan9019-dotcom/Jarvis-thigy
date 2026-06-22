@@ -40,17 +40,20 @@ def _is_wake(text: str) -> bool:
     return any(t in lower for t in _TRIGGERS)
 
 
-def _listen_loop(sample_rate: int = 16000, chunk_sec: float = 1.2, silence_threshold: float = 0.008):
-    """Continuously records short clips and transcribes with tiny.en to spot 'Jarvis'."""
+def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
+    """
+    Continuously records short clips at the mic's NATIVE sample rate,
+    resamples to 16 kHz for Whisper, and detects the wake word "Jarvis".
+    """
     try:
         import sounddevice as sd
         import numpy as np
+        from scipy.signal import resample as scipy_resample
         from scipy.io import wavfile
-    except ImportError:
-        print("[WAKE] sounddevice/scipy not installed — wake word disabled")
+    except ImportError as e:
+        print(f"[WAKE] Missing dependency ({e}) — wake word disabled")
         return
 
-    # Import here to avoid circular import (stt imports nothing from wake_word)
     from stt import _load_whisper_model
     try:
         model = _load_whisper_model("tiny.en")
@@ -58,25 +61,38 @@ def _listen_loop(sample_rate: int = 16000, chunk_sec: float = 1.2, silence_thres
         print(f"[WAKE] Could not load tiny.en: {e} — wake word disabled")
         return
 
-    temp_dir = Path(tempfile.gettempdir()) / "jarvis_wake"
+    # ── Query native mic sample rate (Windows mics often NOT 16000 Hz) ────
+    try:
+        dev_info  = sd.query_devices(kind="input")
+        native_sr = int(dev_info.get("default_samplerate", 16000))
+    except Exception:
+        native_sr = 44100
+    TARGET_SR = 16000
+    chunk_samples = int(native_sr * chunk_sec)
+
+    temp_dir  = Path(tempfile.gettempdir()) / "jarvis_wake"
     temp_dir.mkdir(exist_ok=True)
     clip_path = str(temp_dir / "clip.wav")
 
-    chunk_samples = int(sample_rate * chunk_sec)
-    print("[WAKE] Listening for 'Jarvis'...")
+    print(f"[WAKE] Mic native rate: {native_sr} Hz  |  chunk: {chunk_sec}s  |  model: tiny.en")
+    print("[WAKE] Listening for 'Jarvis'... (you will see [WAKE] Heard: ... for every non-silent clip)")
 
     while True:
         try:
-            audio = sd.rec(chunk_samples, samplerate=sample_rate, channels=1, dtype="float32")
+            audio = sd.rec(chunk_samples, samplerate=native_sr, channels=1, dtype="float32")
             sd.wait()
+            audio = audio.flatten()
 
-            import numpy as np
             rms = float(np.sqrt(np.mean(audio ** 2)))
             if rms < silence_threshold:
-                continue  # silence — skip transcription
+                continue  # silent clip — skip
 
-            from scipy.io import wavfile
-            wavfile.write(clip_path, sample_rate, (audio * 32767).astype(np.int16))
+            # Resample to 16000 Hz for Whisper
+            if native_sr != TARGET_SR:
+                target_len = int(len(audio) * TARGET_SR / native_sr)
+                audio = scipy_resample(audio, target_len).astype(np.float32)
+
+            wavfile.write(clip_path, TARGET_SR, (audio * 32767).astype(np.int16))
 
             segs, _ = model.transcribe(
                 clip_path, language="en",
@@ -90,13 +106,13 @@ def _listen_loop(sample_rate: int = 16000, chunk_sec: float = 1.2, silence_thres
 
             if _is_wake(text):
                 print("[WAKE] *** 'Jarvis' detected — activating ***")
-                _play_chime()
+                # Play chime in a separate thread so it doesn't block recording
+                threading.Thread(target=_play_chime, daemon=True).start()
                 _wake_queue.put({"type": "wake_word", "heard": text})
 
         except Exception as e:
             print(f"[WAKE] Loop error: {e}")
             time.sleep(1)
-
 
 _thread: threading.Thread | None = None
 
