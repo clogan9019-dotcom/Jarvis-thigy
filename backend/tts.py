@@ -85,22 +85,12 @@ def tts_to_file(text: str) -> str | None:
     Convert text to speech. Returns path to audio file.
     Priority:
       1. ElevenLabs (if ELEVENLABS_API_KEY set)
-    # ── 2. gTTS — British accent (Google TTS, free, needs internet) ────────────
-    try:
-        from gtts import gTTS
-        out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
-        tts_obj = gTTS(text=text, lang="en", tld="co.uk", slow=False)
-        tts_obj.save(str(out_path))
-        if out_path.exists() and out_path.stat().st_size > 0:
-            print(f"[TTS] gTTS British → {out_path.name}")
-            return str(out_path)
-    except Exception as e:
-        print(f"[TTS] gTTS failed: {e}")
-
-      3. Edge TTS - en-GB-RyanNeural (free Microsoft neural voice, JARVIS-like)
-      3. Edge TTS - en-GB-RyanNeural (free Microsoft neural, needs internet)
-      4. Windows SAPI via PowerShell (built-in fallback)
-      5. pyttsx3
+      2. Piper TTS - en_GB-alan-medium (offline, MALE British)
+      3. Edge TTS  - en-GB-RyanNeural  (online, MALE British)
+      4. PowerShell SAPI (George/Ryan voice)
+      5. gTTS British (online, female - last resort)
+      6. win32com SAPI
+      7. pyttsx3
     """
     out_dir = Path(tempfile.gettempdir()) / "jarvis_tts"
     out_dir.mkdir(exist_ok=True)
@@ -135,7 +125,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] gTTS failed: {e}")
 
-    # ── 3. Piper TTS — offline British male voice (downloads model on first use) ─
+    # ── 2. Piper TTS — offline MALE British voice (downloads model on first use) ─
     try:
         import wave, urllib.request
         from piper.voice import PiperVoice
@@ -160,7 +150,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Piper TTS failed: {e}")
 
-    # ── 4. Edge TTS ──────────────────────────────────────────────────────────────
+    # ── 3. Edge TTS (RyanNeural — MALE British) ─────────────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
         ok = asyncio.run(_edge_tts_async(text, str(out_path)))
@@ -170,7 +160,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Edge TTS error: {e}")
 
-    # ── 5. PowerShell SAPI (no Python deps needed) ───────────────────────────
+    # ── 4. PowerShell SAPI (no Python deps needed) ───────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         safe_text = _escape_ps(text)
@@ -205,6 +195,17 @@ def tts_to_file(text: str) -> str | None:
             print(f"[TTS] PowerShell SAPI failed (rc={result.returncode}): {result.stderr[:200]}")
     except Exception as e:
         print(f"[TTS] PowerShell SAPI error: {e}")
+
+    # ── 5. gTTS — British accent (online, female — last resort) ─────────────────
+    try:
+        from gtts import gTTS as _gTTS
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
+        _gTTS(text=text, lang="en", tld="co.uk", slow=False).save(str(out_path))
+        if out_path.exists() and out_path.stat().st_size > 0:
+            print(f"[TTS] gTTS British (female fallback) → {out_path.name}")
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] gTTS failed: {e}")
 
     # ── 6. win32com SAPI ─────────────────────────────────────────────────────
     try:
