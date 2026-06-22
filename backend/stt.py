@@ -147,7 +147,7 @@
           return {"ok": False, "error": f"File not found: {audio_path}"}
 
       try:
-          model_size = os.getenv("WHISPER_MODEL", "tiny.en")
+          model_size = os.getenv("WHISPER_MODEL", "base.en")
           model = _load_whisper_model(model_size)
 
           t0 = time.time()
