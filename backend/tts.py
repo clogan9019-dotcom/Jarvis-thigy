@@ -7,55 +7,6 @@ import subprocess
 from pathlib import Path
 
 
-    """Post-process WAV: metallic high-freq boost + reverb for the JARVIS sound."""
-    try:
-        import numpy as np
-        from scipy.io import wavfile
-        from scipy.signal import lfilter, butter, sosfilt
-
-        rate, data = wavfile.read(wav_path)
-
-        if data.dtype == np.int16:
-            samples = data.astype(np.float64) / 32768.0
-        elif data.dtype == np.int32:
-            samples = data.astype(np.float64) / 2147483648.0
-        else:
-            samples = data.astype(np.float64)
-
-        mono = samples if samples.ndim == 1 else samples[:, 0]
-
-        # Strong high-frequency metallic/digital edge
-        b_shelf = np.array([1.5, -0.5])
-        mono = lfilter(b_shelf, [1.0], mono)
-
-        # Subtle high-pass to remove muddiness
-        sos = butter(2, 120.0 / (rate / 2), btype='high', output='sos')
-        mono = sosfilt(sos, mono)
-
-        # Short room echo — gives the suit-speaker feel
-        d1 = int(rate * 0.032)
-        rev = np.zeros_like(mono)
-        rev[d1:] = mono[:-d1] * 0.18
-        mono = mono + rev
-
-        # Second softer echo for depth
-        d2 = int(rate * 0.065)
-        rev2 = np.zeros_like(mono)
-        rev2[d2:] = mono[:-d2] * 0.08
-        mono = mono + rev2
-
-        # Normalize
-        peak = np.max(np.abs(mono))
-        if peak > 0:
-            mono = mono / peak * 0.92
-
-        wavfile.write(wav_path, rate, (mono * 32767).astype(np.int16))
-        print("[TTS] JARVIS voice effect applied")
-    except Exception as e:
-        print(f"[TTS] Voice effect skipped: {e}")
-    return wav_path
-
-
 def _escape_ps(text: str) -> str:
     """Escape text for safe embedding in a PowerShell string."""
     text = text.replace("'", "").replace('"', "").replace("`", "").replace("\n", " ")
