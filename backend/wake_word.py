@@ -32,12 +32,35 @@ def _play_chime():
         pass
 
 _wake_queue: queue.Queue = queue.Queue()
+_pause_event = threading.Event()
 _TRIGGERS = {"jarvis", "jarvish", "jarvas", "davis", "harvest"}  # common mishears
+_COMMAND_WINDOW_SEC = 8.0  # after wake, treat the next heard phrase as the user command
 
 
 def _is_wake(text: str) -> bool:
     lower = text.lower()
     return any(t in lower for t in _TRIGGERS)
+
+
+def _command_after_wake(text: str) -> str:
+    """Return words spoken after the wake word in the same transcript, if any."""
+    import re
+
+    for trigger in sorted(_TRIGGERS, key=len, reverse=True):
+        match = re.search(rf"\b{re.escape(trigger)}\b[,.!?;:\- ]*(.*)$", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" .,!?:;-\t\n")
+    return ""
+
+
+def _queue_command(text: str) -> None:
+    """Send a wake-word command to the UI using a dedicated, easy-to-debug event."""
+    _wake_queue.put({
+        "type": "wake_command",
+        "ok": True,
+        "text": text,
+        "source": "wake_word",
+    })
 
 
 def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
@@ -76,9 +99,14 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
 
     print(f"[WAKE] Mic native rate: {native_sr} Hz  |  chunk: {chunk_sec}s  |  model: tiny.en")
     print("[WAKE] Listening for 'Jarvis'... (you will see [WAKE] Heard: ... for every non-silent clip)")
+    armed_until = 0.0
 
     while True:
         try:
+            if _pause_event.is_set():
+                time.sleep(0.05)
+                continue
+
             audio = sd.rec(chunk_samples, samplerate=native_sr, channels=1, dtype="float32")
             sd.wait()
             audio = audio.flatten()
@@ -115,9 +143,18 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
 
             if _is_wake(text):
                 print("[WAKE] *** 'Jarvis' detected — activating ***")
+                command = _command_after_wake(text)
+                armed_until = 0.0 if command else time.time() + _COMMAND_WINDOW_SEC
                 # Play chime in a separate thread so it doesn't block recording
                 threading.Thread(target=_play_chime, daemon=True).start()
                 _wake_queue.put({"type": "wake_word", "heard": text})
+                if command:
+                    print(f"[WAKE] Command in wake phrase: {command!r}")
+                    _queue_command(command)
+            elif text and time.time() < armed_until:
+                print(f"[WAKE] Command after wake: {text!r}")
+                armed_until = 0.0
+                _queue_command(text)
 
         except Exception as e:
             print(f"[WAKE] Loop error: {e}")
@@ -136,6 +173,20 @@ def start(enabled: bool = True) -> None:
         return
     _thread = threading.Thread(target=_listen_loop, daemon=True, name="WakeWordDetector")
     _thread.start()
+
+
+def pause() -> None:
+    """Temporarily pause wake-word mic capture so push-to-talk can own the device."""
+    _pause_event.set()
+
+
+def resume() -> None:
+    """Resume wake-word mic capture after push-to-talk or another exclusive capture."""
+    _pause_event.clear()
+
+
+def is_paused() -> bool:
+    return _pause_event.is_set()
 
 
 def get_queue() -> queue.Queue:

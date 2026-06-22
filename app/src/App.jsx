@@ -113,8 +113,12 @@ export default function App() {
   // Defined BEFORE any useEffect that depends on it
   const playTtsAudio = useCallback((filePath) => {
     try {
-      const filename = filePath.replace(/\\/g, '/').split('/').pop()
-      const url = `${BACKEND}/audio/${filename}`
+      const normalized = filePath.replace(/\\/g, '/')
+      const url = normalized.startsWith('/audio/')
+        ? `${BACKEND}${normalized}`
+        : normalized.startsWith('http')
+          ? normalized
+          : `${BACKEND}/audio/${normalized.split('/').pop()}`
       const audio = new Audio(url)
       audio.play().catch(e => console.warn('[TTS] play failed:', e))
     } catch (e) {
@@ -186,10 +190,15 @@ export default function App() {
           } else if (d.type === 'tts_start') {
             // backend is about to send TTS audio
 
-          } else if (d.type === 'tts') {
+          } else if (d.type === 'tts' || d.type === 'tts_sentence') {
             if (d.path) playTtsAudio(d.path)
+            else if (d.url) playTtsAudio(d.url)
 
-          } else if (d.type === 'stt_result') {
+          } else if (d.type === 'wake_word') {
+            setListening(true)
+            setMsgs(m => [...m, { who: 'JARVIS', text: `🎙️ Wake word detected${d.heard ? `: ${d.heard}` : ''}` }])
+
+          } else if (d.type === 'stt_result' || d.type === 'wake_command') {
             setListening(false)
             if (d.ok && d.text?.trim()) {
               send(d.text.trim())
