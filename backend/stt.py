@@ -101,6 +101,7 @@ def _load_whisper_model(model_size: str):
     from faster_whisper import WhisperModel
     download_root = os.path.join(os.getenv("APPDATA", "."), "jarvis", "models")
 
+    # Try GPU first
     for compute in ("int8_float16", "float16"):
         try:
             model = WhisperModel(
@@ -112,7 +113,23 @@ def _load_whisper_model(model_size: str):
             _model_cache[model_size] = model
             return model
         except Exception as e:
-            print(f"[STT] CUDA/{compute} unavailable: {e}")
+            err_str = str(e).lower()
+            print(f"[STT] CUDA/{compute} failed: {e}")
+            
+            # Check for common DLL errors
+            if "cublas" in err_str or "cudnn" in err_str or "dll" in err_str:
+                print("[STT] ═══════════════════════════════════════════════════════════════")
+                print("[STT] ⚠️  CUDA DLLs missing - GPU acceleration unavailable")
+                print("[STT] ═══════════════════════════════════════════════════════════════")
+                print("[STT] To fix GPU acceleration, run:")
+                print("[STT]    python install_cuda.py")
+                print("[STT] ")
+                print("[STT] Or manually:")
+                print("[STT]    1. Download: https://github.com/Purfview/whisper-standalone-win/releases/tag/libs")
+                print("[STT]    2. Get: cuBLAS.and.cuDNN_CUDA12_win_v2.7z")
+                print("[STT]    3. Extract DLLs to: C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.x\\bin\\")
+                print("[STT] ═══════════════════════════════════════════════════════════════")
+                break
 
     return _load_cpu_model(model_size)
 

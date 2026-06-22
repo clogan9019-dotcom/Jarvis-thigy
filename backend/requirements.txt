@@ -51,6 +51,9 @@ beautifulsoup4==4.12.3
 playwright>=1.44.0
 # After installing: python -m playwright install chromium
 
+# ============ Archive Extraction (for CUDA fix) ============
+py7zr>=0.22.0
+
 # ============================================
 # OPTIONAL API KEYS
 # ============================================
