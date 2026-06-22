@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from llm_agent import JarvisAgent
-from stt import transcribe_audio, transcribe_microphone
+from stt import transcribe_audio, transcribe_microphone, _load_whisper_model
 from tts import tts_to_file
 
 load_dotenv()
@@ -37,6 +37,19 @@ _tts_dir.mkdir(exist_ok=True)
 app.mount("/audio", StaticFiles(directory=str(_tts_dir)), name="audio")
 
 agent = JarvisAgent()
+
+  # ── Pre-load Whisper model in background so first PTT is instant ─────────────
+  def _preload_whisper():
+      import os as _os
+      model_size = _os.getenv("WHISPER_MODEL", "tiny.en")
+      try:
+          _load_whisper_model(model_size)
+          print(f"[JARVIS] Whisper '{model_size}' pre-loaded and ready.")
+      except Exception as e:
+          print(f"[JARVIS] Whisper pre-load failed (will load on first use): {e}")
+
+  import threading as _threading
+  _threading.Thread(target=_preload_whisper, daemon=True).start()
 
 # ── PTT recording state (one active session at a time) ───────────────────────
 _rec: dict = {"active": False, "chunks": [], "stream": None}
