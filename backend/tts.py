@@ -64,7 +64,38 @@ def tts_to_file(text: str) -> str | None:
         except Exception as e:
             print(f"[TTS] ElevenLabs failed: {e}")
 
-    # ── 2. Piper TTS — offline MALE British voice (downloads model on first use) ─
+    # ── 2. Kokoro TTS — human-quality British male voice (bm_george) ────────────
+    try:
+        from kokoro_onnx import Kokoro
+        import soundfile as _sf
+        import numpy as _np
+        import urllib.request as _ur
+        _kokoro_dir = Path(os.getenv("APPDATA", ".")) / "jarvis" / "kokoro"
+        _kokoro_dir.mkdir(parents=True, exist_ok=True)
+        _model_path  = _kokoro_dir / "kokoro-v1.0.onnx"
+        _voices_path = _kokoro_dir / "voices-v1.0.bin"
+        if not _model_path.exists():
+            print("[TTS] Kokoro: downloading model (~85 MB)...")
+            _ur.urlretrieve(
+                "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
+                _model_path
+            )
+        if not _voices_path.exists():
+            _ur.urlretrieve(
+                "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+                _voices_path
+            )
+        kokoro = Kokoro(str(_model_path), str(_voices_path))
+        samples, rate = kokoro.create(text, voice="bm_george", speed=0.95, lang="en-gb")
+        out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
+        _sf.write(str(out_path), samples, rate)
+        if out_path.exists() and out_path.stat().st_size > 0:
+            print(f"[TTS] Kokoro (bm_george) → {out_path.name}")
+            return str(out_path)
+    except Exception as e:
+        print(f"[TTS] Kokoro failed: {e}")
+
+    # ── 3. Piper TTS — offline MALE British voice (downloads model on first use) ─
     try:
         import wave, urllib.request
         from piper.voice import PiperVoice
@@ -88,7 +119,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Piper TTS failed: {e}")
 
-    # ── 3. Edge TTS (RyanNeural — MALE British) ─────────────────────────────────
+    # ── 4. Edge TTS (RyanNeural — MALE British) ─────────────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
         ok = asyncio.run(_edge_tts_async(text, str(out_path)))
@@ -98,7 +129,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] Edge TTS error: {e}")
 
-    # ── 4. PowerShell SAPI (no Python deps needed) ───────────────────────────
+    # ── 5. PowerShell SAPI (no Python deps needed) ───────────────────────────
     try:
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
         safe_text = _escape_ps(text)
@@ -133,7 +164,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] PowerShell SAPI error: {e}")
 
-    # ── 5. gTTS — British accent (online, female — last resort) ─────────────────
+    # ── 6. gTTS — British accent (online, female — last resort) ─────────────────
     try:
         from gtts import gTTS as _gTTS
         out_path = out_dir / f"j_{uuid.uuid4().hex}.mp3"
@@ -144,7 +175,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] gTTS failed: {e}")
 
-    # ── 6. win32com SAPI ─────────────────────────────────────────────────────
+    # ── 7. win32com SAPI ─────────────────────────────────────────────────────
     try:
         import win32com.client
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
@@ -165,7 +196,7 @@ def tts_to_file(text: str) -> str | None:
     except Exception as e:
         print(f"[TTS] win32com SAPI failed: {e}")
 
-    # ── 7. pyttsx3 ───────────────────────────────────────────────────────────
+    # ── 8. pyttsx3 ───────────────────────────────────────────────────────────
     try:
         import pyttsx3
         out_path = out_dir / f"j_{uuid.uuid4().hex}.wav"
