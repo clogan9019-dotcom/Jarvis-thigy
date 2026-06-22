@@ -8,6 +8,55 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+  # ── Persistent conversation history ──────────────────────────────────────────
+  import pathlib, datetime as _dt
+
+  _HISTORY_FILE = pathlib.Path.home() / "Jarvis" / "conversation_history.json"
+  _HISTORY_MAX  = 200   # keep last 200 messages in the file (~100 exchanges)
+
+
+  def _load_history() -> list:
+      """Load conversation history from disk. Returns [] on any error."""
+      try:
+          _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+          if _HISTORY_FILE.exists():
+              with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
+                  msgs = json.load(f)
+              # Only keep role/content fields for the LLM; strip metadata
+              return [{"role": m["role"], "content": m["content"]} for m in msgs if "role" in m]
+      except Exception as e:
+          print(f"[JARVIS] Could not load conversation history: {e}")
+      return []
+
+
+  def _save_history(history: list) -> None:
+      """Append timestamp metadata and write history to disk, trimmed to _HISTORY_MAX."""
+      try:
+          _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+          # Re-read file so we don't lose entries from a parallel process
+          existing = []
+          if _HISTORY_FILE.exists():
+              try:
+                  with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
+                      existing = json.load(f)
+              except Exception:
+                  existing = []
+          # history is the full in-memory list — write it with a saved_at field
+          stamped = []
+          for m in history:
+              stamped.append({
+                  "role": m["role"],
+                  "content": m["content"],
+                  "saved_at": _dt.datetime.now().isoformat(timespec="seconds")
+              })
+          # Trim to last _HISTORY_MAX
+          trimmed = stamped[-_HISTORY_MAX:]
+          with open(_HISTORY_FILE, "w", encoding="utf-8") as f:
+              json.dump(trimmed, f, ensure_ascii=False, indent=2)
+      except Exception as e:
+          print(f"[JARVIS] Could not save conversation history: {e}")
+
+  
 # Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder-14b-instruct-abliterated:latest")
@@ -91,7 +140,7 @@ Time: {time.strftime('%I:%M %p')}
 
 class JarvisAgent:
     def __init__(self):
-        self.history: List[Dict[str,str]] = []
+        self.history: List[Dict[str,str]] = _load_history()
         self.ollama_host = OLLAMA_HOST
         self.model = OLLAMA_MODEL
 
@@ -264,6 +313,7 @@ class JarvisAgent:
 
         self.history.append({"role": "user", "content": user_msg})
         self.history.append({"role": "assistant", "content": full_response})
+        _save_history(self.history)
 
         yield {"type": "done", "text": full_response}
 
