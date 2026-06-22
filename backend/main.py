@@ -63,14 +63,19 @@ async def _wake_broadcast():
         while not q.empty():
             try:
                 event = q.get_nowait()
+                print(f"[WAKE BROADCAST] Event: {event}")  # DEBUG
                 dead = set()
                 for client in list(_ws_clients):
                     try:
                         await client.send_text(json.dumps(event))
-                    except Exception:
+                        print(f"[WAKE BROADCAST] Sent to client: {client}")  # DEBUG
+                    except Exception as e:
+                        print(f"[WAKE BROADCAST] Client error: {e}")  # DEBUG
                         dead.add(client)
                 _ws_clients -= dead
-            except Exception:
+                print(f"[WAKE BROADCAST] Active clients: {len(_ws_clients)}")  # DEBUG
+            except Exception as e:
+                print(f"[WAKE BROADCAST] Queue error: {e}")  # DEBUG
                 pass
 
 

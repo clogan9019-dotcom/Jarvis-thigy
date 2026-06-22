@@ -2,6 +2,7 @@
 Wake Word Detector - listens for "Jarvis" using faster-whisper tiny.en.
 Fully local, no API keys, no new packages (faster-whisper + sounddevice already installed).
 """
+
 import os
 import time
 import queue
@@ -11,7 +12,7 @@ from pathlib import Path
 
 
 def _play_chime():
-    """Two-tone Iron Man-style activation chime. Plays async so it doesn't block the listener."""
+    """Two-tone Iron Man-style activation chime."""
     try:
         import numpy as np
         import sounddevice as sd
@@ -24,17 +25,16 @@ def _play_chime():
                 wave[:fade] *= np.linspace(0, 1, fade)
                 wave[-fade:] *= np.linspace(1, 0, fade)
             return wave.astype(np.float32)
-        # Ascending two-tone: subtle but recognisable
         chime = np.concatenate([_tone(880, 0.10), np.zeros(int(sr * 0.03), dtype=np.float32), _tone(1320, 0.18)])
         sd.play(chime, sr)
-        # Don't sd.wait() here — fire and forget so listener resumes immediately
     except Exception:
         pass
 
+
 _wake_queue: queue.Queue = queue.Queue()
 _pause_event = threading.Event()
-_TRIGGERS = {"jarvis", "jarvish", "jarvas", "davis", "harvest"}  # common mishears
-_COMMAND_WINDOW_SEC = 8.0  # after wake, treat the next heard phrase as the user command
+_TRIGGERS = {"jarvis", "jarvish", "jarvas", "davis", "harvest"}
+_COMMAND_WINDOW_SEC = 8.0  # Time after wake word to capture command
 
 
 def _is_wake(text: str) -> bool:
@@ -43,10 +43,7 @@ def _is_wake(text: str) -> bool:
 
 
 def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
-    """
-    Continuously records short clips at the mic's NATIVE sample rate,
-    resamples to 16 kHz for Whisper, and detects the wake word "Jarvis".
-    """
+    """Continuously records short clips and detects the wake word 'Jarvis'."""
     try:
         import sounddevice as sd
         import numpy as np
@@ -58,27 +55,29 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
 
     from stt import _load_cpu_model
     try:
-        model = _load_cpu_model("tiny.en")  # CPU — fast enough, avoids CUDA DLL conflict
+        model = _load_cpu_model("tiny.en")
     except Exception as e:
         print(f"[WAKE] Could not load tiny.en: {e} — wake word disabled")
         return
 
-    # ── Query native mic sample rate (Windows mics often NOT 16000 Hz) ────
+    # Query native mic sample rate
     try:
-        dev_info  = sd.query_devices(kind="input")
+        dev_info = sd.query_devices(kind="input")
         native_sr = int(dev_info.get("default_samplerate", 16000))
     except Exception:
         native_sr = 44100
+    
     TARGET_SR = 16000
     chunk_samples = int(native_sr * chunk_sec)
 
-    temp_dir  = Path(tempfile.gettempdir()) / "jarvis_wake"
+    temp_dir = Path(tempfile.gettempdir()) / "jarvis_wake"
     temp_dir.mkdir(exist_ok=True)
     clip_path = str(temp_dir / "clip.wav")
 
-    print(f"[WAKE] Mic native rate: {native_sr} Hz  |  chunk: {chunk_sec}s  |  model: tiny.en")
-    print("[WAKE] Listening for 'Jarvis'... (you will see [WAKE] Heard: ... for every non-silent clip)")
+    print(f"[WAKE] Mic native rate: {native_sr} Hz | chunk: {chunk_sec}s | model: tiny.en")
+    print("[WAKE] Listening for 'Jarvis'... (say 'Jarvis' followed by your question)")
     armed_until = 0.0
+    wake_detected_at = 0.0  # Track when we heard "Jarvis"
 
     while True:
         try:
@@ -91,9 +90,7 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
             audio = audio.flatten()
 
             rms = float(np.sqrt(np.mean(audio ** 2)))
-            if rms < silence_threshold:
-                continue  # silent clip — skip
-
+            
             # Resample to 16000 Hz for Whisper
             if native_sr != TARGET_SR:
                 target_len = int(len(audio) * TARGET_SR / native_sr)
@@ -112,28 +109,44 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
                 err_s = str(infer_err).lower()
                 if any(k in err_s for k in ("cublas", "cuda", "dll", "library")):
                     from stt import _load_cpu_model as _cpu
-                    print(f"[WAKE] CUDA inference failed ({infer_err}) — switching to CPU permanently")
+                    print(f"[WAKE] CUDA inference failed — switching to CPU")
                     model = _cpu("tiny.en")
-                    continue  # retry next clip with CPU model
+                    continue
                 raise
 
             if text:
                 print(f"[WAKE] Heard: {text!r}")
-
-            if _is_wake(text):
-                print("[WAKE] *** 'Jarvis' detected — activating ***")
-                armed_until = time.time() + _COMMAND_WINDOW_SEC
-                # Play chime in a separate thread so it doesn't block recording
-                threading.Thread(target=_play_chime, daemon=True).start()
-                _wake_queue.put({"type": "wake_word", "heard": text})
-            elif text and time.time() < armed_until:
-                print(f"[WAKE] Command after wake: {text!r}")
+                
+                # Check if this is the wake word
+                if _is_wake(text):
+                    print("[WAKE] *** 'Jarvis' detected — say your question now! ***")
+                    armed_until = time.time() + _COMMAND_WINDOW_SEC
+                    wake_detected_at = time.time()
+                    threading.Thread(target=_play_chime, daemon=True).start()
+                    _wake_queue.put({"type": "wake_word", "heard": text})
+                
+                # If we're in command window AND some time has passed since wake word
+                # AND the text is different from the wake word trigger
+                elif text and time.time() < armed_until:
+                    # Only send as command if it's been at least 1 second since wake word
+                    # (to avoid capturing the tail of the "Jarvis" utterance)
+                    if time.time() - wake_detected_at > 1.0:
+                        time_since_wake = time.time() - wake_detected_at
+                        print(f"[WAKE] Command captured ({time_since_wake:.1f}s after wake): {text!r}")
+                        armed_until = 0.0  # Reset
+                        _wake_queue.put({"type": "stt_result", "ok": True, "text": text})
+                    else:
+                        print(f"[WAKE] Too soon after wake word, waiting...")
+                        
+            # Check if command window expired without getting a command
+            elif armed_until > 0 and time.time() > armed_until:
+                print("[WAKE] Command window expired, listening for 'Jarvis' again...")
                 armed_until = 0.0
-                _wake_queue.put({"type": "stt_result", "ok": True, "text": text})
 
         except Exception as e:
             print(f"[WAKE] Loop error: {e}")
             time.sleep(1)
+
 
 _thread: threading.Thread | None = None
 
