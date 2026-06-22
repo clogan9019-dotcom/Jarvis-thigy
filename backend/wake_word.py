@@ -54,9 +54,9 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
         print(f"[WAKE] Missing dependency ({e}) — wake word disabled")
         return
 
-    from stt import _load_whisper_model
+    from stt import _load_cpu_model
     try:
-        model = _load_whisper_model("tiny.en")
+        model = _load_cpu_model("tiny.en")  # CPU — fast enough, avoids CUDA DLL conflict
     except Exception as e:
         print(f"[WAKE] Could not load tiny.en: {e} — wake word disabled")
         return
@@ -94,12 +94,21 @@ def _listen_loop(chunk_sec: float = 1.5, silence_threshold: float = 0.003):
 
             wavfile.write(clip_path, TARGET_SR, (audio * 32767).astype(np.int16))
 
-            segs, _ = model.transcribe(
-                clip_path, language="en",
-                beam_size=1, vad_filter=True,
-                condition_on_previous_text=False
-            )
-            text = " ".join(s.text for s in segs).strip()
+            try:
+                segs, _ = model.transcribe(
+                    clip_path, language="en",
+                    beam_size=1, vad_filter=True,
+                    condition_on_previous_text=False
+                )
+                text = " ".join(s.text for s in segs).strip()
+            except Exception as infer_err:
+                err_s = str(infer_err).lower()
+                if any(k in err_s for k in ("cublas", "cuda", "dll", "library")):
+                    from stt import _load_cpu_model as _cpu
+                    print(f"[WAKE] CUDA inference failed ({infer_err}) — switching to CPU permanently")
+                    model = _cpu("tiny.en")
+                    continue  # retry next clip with CPU model
+                raise
 
             if text:
                 print(f"[WAKE] Heard: {text!r}")
