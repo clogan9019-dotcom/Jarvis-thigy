@@ -4,6 +4,7 @@ FastAPI server with WebSocket support
 """
 
 import asyncio
+import re
 import json
 import os
 import tempfile
@@ -83,6 +84,41 @@ async def _on_startup():
 # ── PTT recording state (one active session at a time) ───────────────────────
 _rec: dict = {"active": False, "chunks": [], "stream": None}
 _ws_clients: set = set()  # all live WebSocket connections
+
+
+# ── Sentence-streaming TTS helpers ─────────────────────────────────────────
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+|\n{2,}')
+
+
+def _split_sentences(text: str) -> list:
+    """Split on sentence boundaries. Last element may be incomplete."""
+    parts = [p for p in _SENT_SPLIT.split(text) if p]
+    return parts if parts else [text]
+
+
+async def _tts_stream_worker(ws, q: asyncio.Queue) -> None:
+    """Drain sentence queue, generate TTS for each, stream audio to client in order."""
+    seq = 0
+    while True:
+        sentence = await q.get()
+        if sentence is None:
+            break
+        try:
+            loop = asyncio.get_event_loop()
+            audio_path = await loop.run_in_executor(None, tts_to_file, sentence)
+            if audio_path and os.path.exists(audio_path):
+                filename = Path(audio_path).name
+                await ws.send_text(json.dumps({
+                    "type": "tts_sentence",
+                    "path": audio_path,
+                    "url": f"/audio/{filename}",
+                    "seq": seq
+                }))
+                seq += 1
+        except Exception as e:
+            print(f"[TTS-Stream] error: {e}")
+        finally:
+            q.task_done()
 
 
 # ============ MODELS ============
@@ -199,22 +235,43 @@ async def ws_endpoint(ws: WebSocket):
                 user_text = data.get("text", "")
                 await ws.send_text(json.dumps({"type": "status", "text": "thinking"}))
 
+                # ── Sentence-streaming TTS ────────────────────────────────
+                tts_q: asyncio.Queue = asyncio.Queue()
+                tts_worker = asyncio.create_task(_tts_stream_worker(ws, tts_q))
+                tts_started = False
+
                 full = ""
+                buf = ""
                 async for chunk in agent.stream_chat(user_text):
                     ctype = chunk.get("type")
                     if ctype == "delta":
-                        full += chunk["text"]
+                        token = chunk["text"]
+                        full += token
+                        buf  += token
                         await ws.send_text(json.dumps(chunk))
+                        # Flush complete sentences into TTS queue as they arrive
+                        parts = _split_sentences(buf)
+                        for sentence in parts[:-1]:
+                            s = sentence.strip()
+                            if s and not s.startswith("```"):
+                                if not tts_started:
+                                    await ws.send_text(json.dumps({"type": "tts_start"}))
+                                    tts_started = True
+                                await tts_q.put(s)
+                        buf = parts[-1]
                     elif ctype in ("tool", "research_progress", "done"):
                         await ws.send_text(json.dumps(chunk))
 
-                # Generate TTS in a thread so the event loop stays free
-                if full.strip():
-                    await ws.send_text(json.dumps({"type": "tts_start"}))
-                    loop = asyncio.get_event_loop()
-                    audio_path = await loop.run_in_executor(None, tts_to_file, full)
-                    if audio_path and os.path.exists(audio_path):
-                        await ws.send_text(json.dumps({"type": "tts", "path": audio_path}))
+                # Flush remaining buffer after stream ends
+                tail = buf.strip()
+                if tail and not tail.startswith("```"):
+                    if not tts_started:
+                        await ws.send_text(json.dumps({"type": "tts_start"}))
+                    await tts_q.put(tail)
+
+                # Signal worker done and wait for all audio to be sent
+                await tts_q.put(None)
+                await tts_worker
 
             elif data.get("type") == "interrupt":
                 await ws.send_text(json.dumps({"type": "interrupted"}))
