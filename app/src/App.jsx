@@ -198,7 +198,7 @@ export default function App() {
             setListening(true)
             setMsgs(m => [...m, { who: 'JARVIS', text: `🎙️ Wake word detected${d.heard ? `: ${d.heard}` : ''}` }])
 
-          } else if (d.type === 'stt_result' || d.type === 'wake_command') {
+          } else if (d.type === 'stt_result') {
             setListening(false)
             if (d.ok && d.text?.trim()) {
               send(d.text.trim())

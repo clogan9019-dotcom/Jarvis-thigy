@@ -54,9 +54,9 @@ def _command_after_wake(text: str) -> str:
 
 
 def _queue_command(text: str) -> None:
-    """Send a wake-word command to the UI using a dedicated, easy-to-debug event."""
+    """Send a wake-word command through the same path as normal STT results."""
     _wake_queue.put({
-        "type": "wake_command",
+        "type": "stt_result",
         "ok": True,
         "text": text,
         "source": "wake_word",

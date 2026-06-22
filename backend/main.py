@@ -64,7 +64,7 @@ async def _wake_broadcast():
             try:
                 event = q.get_nowait()
                 dead = set()
-                if event.get("type") in {"wake_word", "wake_command", "stt_result"}:
+                if event.get("type") in {"wake_word", "stt_result"}:
                     print(f"[WAKE] Broadcasting {event.get('type')} to {len(_ws_clients)} websocket client(s)")
                 for client in list(_ws_clients):
                     try:
