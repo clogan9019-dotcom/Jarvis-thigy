@@ -7,6 +7,65 @@ import subprocess
 from pathlib import Path
 
 
+def _download_file(url: str, dst, label: str) -> None:
+    """
+    Download a file with progress. Uses aria2c if available (fast, multi-conn),
+    falls back to urllib with a live progress bar.
+    """
+    import shutil, urllib.request as _ur
+    dst = str(dst)
+
+    # ── Try aria2c ────────────────────────────────────────────────────────────
+    aria2 = shutil.which("aria2c")
+    if aria2:
+        import subprocess as _sp
+        import os as _os
+        out_dir  = _os.path.dirname(dst)
+        out_name = _os.path.basename(dst)
+        print(f"[TTS] {label}: downloading via aria2c...")
+        proc = _sp.Popen(
+            [
+                aria2, url,
+                f"--dir={out_dir}",
+                f"--out={out_name}",
+                "--split=8",
+                "--max-connection-per-server=8",
+                "--min-split-size=1M",
+                "--console-log-level=notice",
+                "--show-console-readout=true",
+                "--summary-interval=1",
+            ],
+            stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            # aria2 progress lines contain "%" — print them in-place
+            if "%" in line or "Download" in line or "ETA" in line:
+                print(f"\r[TTS] {label}: {line.strip()}", end="", flush=True)
+        proc.wait()
+        print()  # newline after progress
+        if proc.returncode == 0:
+            return
+        print(f"[TTS] aria2c failed (rc={proc.returncode}), falling back to urllib...")
+
+    # ── urllib fallback with live % progress ──────────────────────────────────
+    def _hook(block, block_size, total):
+        if total <= 0:
+            return
+        done = min(block * block_size, total)
+        pct  = done * 100 // total
+        mb_done  = done / 1_048_576
+        mb_total = total / 1_048_576
+        bar_len  = 30
+        filled   = int(bar_len * done / total)
+        bar      = "█" * filled + "░" * (bar_len - filled)
+        print(f"\r[TTS] {label}: [{bar}] {pct:3d}%  {mb_done:.1f}/{mb_total:.1f} MB", end="", flush=True)
+
+    print(f"[TTS] {label}: downloading...", flush=True)
+    _ur.urlretrieve(url, dst, reporthook=_hook)
+    print(f"\n[TTS] {label}: done.")
+
+
 def _escape_ps(text: str) -> str:
     """Escape text for safe embedding in a PowerShell string."""
     text = text.replace("'", "").replace('"', "").replace("`", "").replace("\n", " ")
@@ -69,21 +128,19 @@ def tts_to_file(text: str) -> str | None:
         from kokoro_onnx import Kokoro
         import soundfile as _sf
         import numpy as _np
-        import urllib.request as _ur
         _kokoro_dir = Path(os.getenv("APPDATA", ".")) / "jarvis" / "kokoro"
         _kokoro_dir.mkdir(parents=True, exist_ok=True)
         _model_path  = _kokoro_dir / "kokoro-v1.0.onnx"
         _voices_path = _kokoro_dir / "voices-v1.0.bin"
         if not _model_path.exists():
-            print("[TTS] Kokoro: downloading model (~85 MB)...")
-            _ur.urlretrieve(
+            _download_file(
                 "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
-                _model_path
+                _model_path, "Kokoro model (~85 MB)"
             )
         if not _voices_path.exists():
-            _ur.urlretrieve(
+            _download_file(
                 "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
-                _voices_path
+                _voices_path, "Kokoro voices (~80 MB)"
             )
         kokoro = Kokoro(str(_model_path), str(_voices_path))
         samples, rate = kokoro.create(text, voice="bm_george", speed=0.95, lang="en-gb")
