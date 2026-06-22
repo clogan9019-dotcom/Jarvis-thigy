@@ -9,6 +9,28 @@ import threading
 import tempfile
 from pathlib import Path
 
+
+def _play_chime():
+    """Two-tone Iron Man-style activation chime. Plays async so it doesn't block the listener."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+        sr = 22050
+        def _tone(freq, dur, vol=0.35):
+            t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+            wave = vol * np.sin(2 * np.pi * freq * t)
+            fade = int(sr * 0.01)
+            if fade > 0:
+                wave[:fade] *= np.linspace(0, 1, fade)
+                wave[-fade:] *= np.linspace(1, 0, fade)
+            return wave.astype(np.float32)
+        # Ascending two-tone: subtle but recognisable
+        chime = np.concatenate([_tone(880, 0.10), np.zeros(int(sr * 0.03), dtype=np.float32), _tone(1320, 0.18)])
+        sd.play(chime, sr)
+        # Don't sd.wait() here — fire and forget so listener resumes immediately
+    except Exception:
+        pass
+
 _wake_queue: queue.Queue = queue.Queue()
 _TRIGGERS = {"jarvis", "jarvish", "jarvas", "davis", "harvest"}  # common mishears
 
@@ -68,6 +90,7 @@ def _listen_loop(sample_rate: int = 16000, chunk_sec: float = 1.2, silence_thres
 
             if _is_wake(text):
                 print("[WAKE] *** 'Jarvis' detected — activating ***")
+                _play_chime()
                 _wake_queue.put({"type": "wake_word", "heard": text})
 
         except Exception as e:
