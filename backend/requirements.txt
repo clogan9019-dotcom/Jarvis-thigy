@@ -47,13 +47,18 @@ piper-tts>=2.0.0
   duckduckgo-search==6.3.4
   beautifulsoup4==4.12.3
 
+  # ============ Browser Automation (Full Control) ============
+  playwright>=1.44.0
+  # After installing: python -m playwright install chromium
+
   # ============================================
   # OPTIONAL API KEYS
   # ============================================
   # ELEVENLABS_API_KEY=...    # Premium TTS (edge-tts is free and nearly as good)
+  # BRAVE_SEARCH_API_KEY=...  # Better web search results
 
   # ============================================
   # INSTALL:
   #   pip install -r requirements.txt
+  #   python -m playwright install chromium
   # ============================================
-  
