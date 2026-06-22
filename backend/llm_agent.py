@@ -63,7 +63,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder-14b-instruct-abliterated
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "llava:latest")
 
 # Import tools
-from tools import screen_vision, computer_control, file_terminal, web_search, memory_rag, deep_research as dr_module
+from tools import screen_vision, computer_control, file_terminal, web_search, memory_rag, deep_research as dr_module, system_stats as sys_stats
 
 TOOLS = {
     "screen_capture": screen_vision.screen_capture,
@@ -79,6 +79,7 @@ TOOLS = {
     "memory_add": memory_rag.memory_add,
     "memory_search": memory_rag.memory_search,
     "deep_research": dr_module.deep_research,
+    "get_system_stats": sys_stats.get_system_stats,
 }
 
 TOOL_DESCRIPTIONS = """
@@ -116,6 +117,9 @@ Available tools:
 
 10. click - Click screen coordinates
     [TOOL: click] {"x": 100, "y": 200}
+
+11. get_system_stats - Get live PC hardware stats (CPU, RAM, GPU, disk, network, top processes)
+    [TOOL: get_system_stats] {}
 
 IMPORTANT: When the user asks to research, investigate, or study any topic, use deep_research.
 When asked about the screen, use analyze_screen.
