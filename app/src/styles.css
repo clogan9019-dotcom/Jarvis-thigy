@@ -77,13 +77,15 @@ body {
 @keyframes wordIn { from { opacity:0; transform: scale(.92);} to{opacity:1; transform: scale(1);} }
 .speak-word:empty { display:none; }
 
-/* Top-left transcript */
+/* Top-left transcript — scrollable */
 .transcript-bar {
   position: absolute;
   top: 54px;
   left: 0;
   width: 420px;
-  padding: 14px 20px 18px 24px;
+  /* leaves room for the dock at the bottom */
+  height: calc(100vh - 120px);
+  padding: 14px 8px 14px 24px;
   background: linear-gradient(135deg, rgba(0,0,0,.72) 0%, rgba(0,4,8,.52) 100%);
   border-right: 1px solid rgba(0,229,255,0.07);
   border-bottom: 1px solid rgba(0,229,255,0.07);
@@ -92,15 +94,36 @@ body {
   font-size: 12px;
   line-height: 1.8;
   color: #58b9c9;
-  max-height: calc(100vh - 120px);
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
   backdrop-filter: blur(6px);
   transition: opacity .25s;
+  display: flex;
+  flex-direction: column;
 }
-.transcript-bar .line { margin-bottom: 5px; word-break: break-word; }
-.transcript-bar .who { color: #2e7e8d; margin-right: 8px; flex-shrink: 0; }
+
+/* push messages to the bottom when there are few of them */
+.transcript-bar .spacer { flex: 1; }
+
+.transcript-bar .line {
+  margin-bottom: 6px;
+  word-break: break-word;
+  padding-right: 12px;
+  flex-shrink: 0;
+}
+.transcript-bar .who { color: #2e7e8d; margin-right: 8px; }
 .transcript-bar .you { color: #d4a85e; }
+
+/* thin cyan scrollbar */
+.transcript-bar::-webkit-scrollbar { width: 4px; }
+.transcript-bar::-webkit-scrollbar-track { background: transparent; }
+.transcript-bar::-webkit-scrollbar-thumb {
+  background: rgba(0,229,255,0.22);
+  border-radius: 4px;
+}
+.transcript-bar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,229,255,0.45);
+}
 
 /* Side status – toggleable */
 .side-hud {
@@ -166,7 +189,7 @@ body {
 }
 .mic-ring.active { border-color: rgba(0,229,255,0.28); box-shadow: 0 0 55px rgba(0,229,255,.07);}
 
-/* helper */
+/* hint */
 .hint {
   position: absolute; bottom: 14px; left: 22px;
   font-size: 10.5px; color: #214b55; z-index: 20; letter-spacing:.04em;
