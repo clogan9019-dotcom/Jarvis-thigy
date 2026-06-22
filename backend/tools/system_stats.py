@@ -42,55 +42,75 @@ def get_system_stats() -> dict:
     except Exception as e:
         stats["ram"] = {"error": str(e)}
 
-    # ── GPU (NVIDIA via GPUtil) ───────────────────────────────────────────────
-    try:
-        import GPUtil
-        gpus = GPUtil.getGPUs()
-        if gpus:
-            stats["gpu"] = [
-                {
-                    "name":          g.name,
-                    "load_percent":  round(g.load * 100, 1),
-                    "vram_used_mb":  round(g.memoryUsed, 1),
-                    "vram_total_mb": round(g.memoryTotal, 1),
-                    "vram_free_mb":  round(g.memoryFree, 1),
-                    "temp_c":        g.temperature,
-                    "driver":        g.driver,
-                }
-                for g in gpus
-            ]
-        else:
-            stats["gpu"] = []
-    except ImportError:
-        # Try pynvml as fallback
-        try:
-            import pynvml
-            pynvml.nvmlInit()
-            count = pynvml.nvmlDeviceGetCount()
-            stats["gpu"] = []
-            for i in range(count):
-                h = pynvml.nvmlDeviceGetHandleByIndex(i)
-                mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-                util = pynvml.nvmlDeviceGetUtilizationRates(h)
-                try:
-                    temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
-                except Exception:
-                    temp = None
-                stats["gpu"].append({
-                    "name":          pynvml.nvmlDeviceGetName(h),
-                    "load_percent":  util.gpu,
-                    "vram_used_mb":  round(mem.used / 1e6, 1),
-                    "vram_total_mb": round(mem.total / 1e6, 1),
-                    "vram_free_mb":  round(mem.free / 1e6, 1),
-                    "temp_c":        temp,
-                })
-            pynvml.nvmlShutdown()
-        except Exception as e:
-            stats["gpu"] = {"error": str(e)}
-    except Exception as e:
-        stats["gpu"] = {"error": str(e)}
+    # ── GPU (tries pynvml → GPUtil → nvidia-smi subprocess) ──────────────────
+      try:
+          import pynvml
+          pynvml.nvmlInit()
+          count = pynvml.nvmlDeviceGetCount()
+          gpus = []
+          for i in range(count):
+              h = pynvml.nvmlDeviceGetHandleByIndex(i)
+              mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+              util = pynvml.nvmlDeviceGetUtilizationRates(h)
+              try:
+                  temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+              except Exception:
+                  temp = None
+              name = pynvml.nvmlDeviceGetName(h)
+              if isinstance(name, bytes):
+                  name = name.decode()
+              gpus.append({
+                  "name":          name,
+                  "load_percent":  util.gpu,
+                  "vram_used_mb":  round(mem.used  / 1_048_576, 1),
+                  "vram_total_mb": round(mem.total / 1_048_576, 1),
+                  "vram_free_mb":  round(mem.free  / 1_048_576, 1),
+                  "temp_c":        temp,
+              })
+          pynvml.nvmlShutdown()
+          stats["gpu"] = gpus
+      except Exception:
+          # ── GPUtil fallback ──────────────────────────────────────────────────
+          try:
+              import GPUtil
+              gpus = GPUtil.getGPUs()
+              stats["gpu"] = [
+                  {
+                      "name":          g.name,
+                      "load_percent":  round(g.load * 100, 1),
+                      "vram_used_mb":  round(g.memoryUsed, 1),
+                      "vram_total_mb": round(g.memoryTotal, 1),
+                      "vram_free_mb":  round(g.memoryFree, 1),
+                      "temp_c":        g.temperature,
+                  }
+                  for g in gpus
+              ] if gpus else []
+          except Exception:
+              # ── nvidia-smi subprocess fallback (always works if drivers installed) ──
+              try:
+                  import subprocess as _sp
+                  fields = "name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu"
+                  out = _sp.check_output(
+                      ["nvidia-smi", f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+                      timeout=5, text=True
+                  )
+                  gpus = []
+                  for line in out.strip().splitlines():
+                      parts = [p.strip() for p in line.split(",")]
+                      if len(parts) >= 6:
+                          gpus.append({
+                              "name":          parts[0],
+                              "load_percent":  float(parts[1]) if parts[1] != "[N/A]" else None,
+                              "vram_used_mb":  float(parts[2]) if parts[2] != "[N/A]" else None,
+                              "vram_total_mb": float(parts[3]) if parts[3] != "[N/A]" else None,
+                              "vram_free_mb":  float(parts[4]) if parts[4] != "[N/A]" else None,
+                              "temp_c":        float(parts[5]) if parts[5] != "[N/A]" else None,
+                          })
+                  stats["gpu"] = gpus
+              except Exception as e:
+                  stats["gpu"] = {"error": f"nvidia-smi failed: {e}"}
 
-    # ── Disk ─────────────────────────────────────────────────────────────────
+      # ── Disk ─────────────────────────────────────────────────────────────────
     try:
         import psutil
         disks = []
