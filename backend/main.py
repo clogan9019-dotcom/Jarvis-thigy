@@ -277,8 +277,13 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_text(json.dumps({"type": "interrupted"}))
 
             elif data.get("type") == "transcribe_mic_start":
-                # Start streaming mic capture (non-blocking InputStream callback)
+                # Start streaming mic capture (non-blocking InputStream callback).
+                # Pause wake-word capture first; on Windows, two simultaneous
+                # sounddevice readers can leave the PTT stream full of zeros.
                 try:
+                    import wake_word as _ww
+                    _ww.pause()
+                    await asyncio.sleep(0.1)
                     import sounddevice as sd
                     # Stop any leftover stream
                     if _rec.get("stream"):
@@ -313,6 +318,11 @@ async def ws_endpoint(ws: WebSocket):
                     _rec["stream"] = stream
                     print(f"[STT] PTT recording started… (mic={native_sr}Hz)")
                 except Exception as e:
+                    try:
+                        import wake_word as _ww
+                        _ww.resume()
+                    except Exception:
+                        pass
                     await ws.send_text(json.dumps({
                         "type": "stt_result", "ok": False,
                         "error": f"Could not open mic: {e}"
@@ -335,6 +345,11 @@ async def ws_endpoint(ws: WebSocket):
                         stream.close()
                     except Exception:
                         pass
+                try:
+                    import wake_word as _ww
+                    _ww.resume()
+                except Exception:
+                    pass
 
                 chunks = _rec["chunks"]
                 _rec["chunks"] = []
@@ -355,12 +370,17 @@ async def ws_endpoint(ws: WebSocket):
                         audio = scipy_resample(audio, target_len).astype(np.float32)
                         print(f"[STT] Resampled {native_sr}Hz → 16000Hz")
 
-                    # Too quiet — mic not picking up audio at all
-                    if rms < 0.001:
-                        print("[STT] Audio is silent — mic may not be capturing")
+                    min_rms = float(os.getenv("STT_MIN_RMS", "0.0002"))
+
+                    # Too quiet — mic not picking up audio at all. Keep this
+                    # threshold low because some Windows mics report quiet-but-
+                    # usable speech, while a real capture conflict is usually
+                    # exactly 0.0000 RMS.
+                    if rms < min_rms:
+                        print(f"[STT] Audio below RMS threshold ({rms:.6f} < {min_rms:.6f})")
                         await ws.send_text(json.dumps({
                             "type": "stt_result", "ok": False,
-                            "error": "Mic too quiet — open Windows Sound Settings → Recording tab → right-click your mic → Set as Default Device"
+                            "error": "Mic input is reaching Jarvis too quietly. Wake-word capture has been paused during PTT; try speaking closer or set STT_MIN_RMS=0 to force transcription."
                         }))
                     # Too short — released Space before speaking
                     elif duration_s < 0.4:
@@ -384,9 +404,18 @@ async def ws_endpoint(ws: WebSocket):
 
     except WebSocketDisconnect:
         _ws_clients.discard(ws)
-        pass
+        try:
+            import wake_word as _ww
+            _ww.resume()
+        except Exception:
+            pass
     except Exception as e:
         _ws_clients.discard(ws)
+        try:
+            import wake_word as _ww
+            _ww.resume()
+        except Exception:
+            pass
         print(f"[WS] Error: {e}")
 
 # ============ MEMORY ============
