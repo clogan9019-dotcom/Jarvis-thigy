@@ -6,12 +6,14 @@ from . import file_terminal
 from . import web_search
 from . import memory_rag
 from . import deep_research
+from . import browser_control
 
 __all__ = [
     'screen_vision',
-    'computer_control', 
+    'computer_control',
     'file_terminal',
     'web_search',
     'memory_rag',
-    'deep_research'
+    'deep_research',
+    'browser_control',
 ]
