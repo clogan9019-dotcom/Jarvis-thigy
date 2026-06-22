@@ -159,6 +159,24 @@ class JarvisAgent:
             print(f"[JARVIS] Warning: Ollama not responding: {e}")
             print(f"  → Start Ollama: ollama serve")
 
+        # Warm-up: load model into VRAM immediately, not on first user message
+        try:
+            import threading as _t
+            def _warmup():
+                try:
+                    import httpx as _hx
+                    _hx.post(
+                        f"{self.ollama_host}/api/generate",
+                        json={"model": self.model, "prompt": " ", "stream": False, "keep_alive": -1},
+                        timeout=60
+                    )
+                    print(f"[JARVIS] Ollama model '{self.model}' loaded into VRAM and ready.")
+                except Exception as we:
+                    print(f"[JARVIS] Warmup skipped: {we}")
+            _t.Thread(target=_warmup, daemon=True).start()
+        except Exception:
+            pass
+
     async def chat(self, user_msg: str) -> Dict[str, Any]:
         out = ""
         async for chunk in self.stream_chat(user_msg):
@@ -402,6 +420,7 @@ class JarvisAgent:
             "model": self.model,
             "prompt": prompt,
             "stream": True,
+            "keep_alive": -1,   # keep model in VRAM indefinitely
             "options": {
                 "temperature": 0.4,
                 "top_p": 0.9,
