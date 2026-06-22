@@ -51,8 +51,39 @@ def _preload_whisper():
 import threading as _threading
 _threading.Thread(target=_preload_whisper, daemon=True).start()
 
+
+# ── Wake word: broadcast to all connected WebSocket clients ─────────────────
+async def _wake_broadcast():
+    """Poll wake-word queue every 200ms and push to all live WS clients."""
+    import wake_word as _ww
+    q = _ww.get_queue()
+    while True:
+        await asyncio.sleep(0.2)
+        while not q.empty():
+            try:
+                event = q.get_nowait()
+                dead = set()
+                for client in list(_ws_clients):
+                    try:
+                        await client.send_text(json.dumps(event))
+                    except Exception:
+                        dead.add(client)
+                _ws_clients -= dead
+            except Exception:
+                pass
+
+
+@app.on_event("startup")
+async def _on_startup():
+    """Start wake word detector and the WS broadcast task on server boot."""
+    import wake_word as _ww
+    _ww.start(enabled=os.getenv("WAKE_WORD", "1") != "0")
+    asyncio.create_task(_wake_broadcast())
+
 # ── PTT recording state (one active session at a time) ───────────────────────
 _rec: dict = {"active": False, "chunks": [], "stream": None}
+_ws_clients: set = set()  # all live WebSocket connections
+
 
 # ============ MODELS ============
 class ChatIn(BaseModel):
@@ -158,6 +189,7 @@ async def transcribe_mic_http(duration: float = Form(5.0)):
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
+    _ws_clients.add(ws)
     try:
         while True:
             msg = await ws.receive_text()
@@ -294,8 +326,10 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "stt_result", **result}))
 
     except WebSocketDisconnect:
+        _ws_clients.discard(ws)
         pass
     except Exception as e:
+        _ws_clients.discard(ws)
         print(f"[WS] Error: {e}")
 
 # ============ MEMORY ============
