@@ -101,6 +101,11 @@ export default function App() {
 
   const wsRef = useRef(null)
 
+  // ── Audio queue: prevents sentences from overlapping ─────────────────────
+  const audioQueueRef  = useRef([])   // pending audio URLs
+  const isPlayingRef   = useRef(false) // true while an Audio element is playing
+  const currentAudioRef = useRef(null) // the currently playing Audio element
+
   useParticleSphere(canvasRef, speaking, listening, audioLevel)
 
   useEffect(() => {
@@ -109,20 +114,66 @@ export default function App() {
     return () => clearInterval(id)
   }, [speaking])
 
-  /* ---------- Play TTS audio via backend /audio HTTP endpoint ---------- */
-  // Defined BEFORE any useEffect that depends on it
-  const playTtsAudio = useCallback((filePath) => {
-    try {
-      const normalized = filePath.replace(/\\/g, '/')
-      const url = normalized.startsWith('/audio/')
-        ? `${BACKEND}${normalized}`
-        : normalized.startsWith('http')
-          ? normalized
-          : `${BACKEND}/audio/${normalized.split('/').pop()}`
-      const audio = new Audio(url)
-      audio.play().catch(e => console.warn('[TTS] play failed:', e))
-    } catch (e) {
-      console.warn('[TTS] error:', e)
+  /* ---------- Resolve a file path or URL to a full HTTP URL ---------- */
+  const resolveAudioUrl = useCallback((pathOrUrl) => {
+    const normalized = (pathOrUrl || '').replace(/\\/g, '/')
+    if (normalized.startsWith('http')) return normalized
+    if (normalized.startsWith('/audio/')) return `${BACKEND}${normalized}`
+    // Full local path — extract filename only
+    return `${BACKEND}/audio/${normalized.split('/').pop()}`
+  }, [])
+
+  /* ---------- Play next item in the audio queue ---------- */
+  const playNextInQueue = useCallback(() => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false
+      currentAudioRef.current = null
+      return
+    }
+
+    const url = audioQueueRef.current.shift()
+    isPlayingRef.current = true
+
+    const audio = new Audio(url)
+    currentAudioRef.current = audio
+
+    audio.onended = () => {
+      currentAudioRef.current = null
+      playNextInQueue()
+    }
+
+    audio.onerror = () => {
+      console.warn('[TTS] audio error for', url)
+      currentAudioRef.current = null
+      playNextInQueue()
+    }
+
+    audio.play().catch(e => {
+      console.warn('[TTS] play failed:', e)
+      currentAudioRef.current = null
+      playNextInQueue()
+    })
+  }, [])
+
+  /* ---------- Enqueue a TTS audio file/path ---------- */
+  const enqueueTtsAudio = useCallback((pathOrUrl) => {
+    const url = resolveAudioUrl(pathOrUrl)
+    audioQueueRef.current.push(url)
+    if (!isPlayingRef.current) {
+      playNextInQueue()
+    }
+  }, [resolveAudioUrl, playNextInQueue])
+
+  /* ---------- Stop all audio and clear the queue (interrupt) ---------- */
+  const stopAndClearAudio = useCallback(() => {
+    audioQueueRef.current = []
+    isPlayingRef.current = false
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause()
+        currentAudioRef.current.src = ''
+      } catch (_) {}
+      currentAudioRef.current = null
     }
   }, [])
 
@@ -152,11 +203,11 @@ export default function App() {
           body: JSON.stringify({ text: greet.greeting })
         })
           .then(r => r.json())
-          .then(d => { if (d.ok && d.audio_path) playTtsAudio(d.audio_path) })
+          .then(d => { if (d.ok && d.audio_url) enqueueTtsAudio(d.audio_url) })
           .catch(() => {})
       }
     })
-  }, [playTtsAudio])
+  }, [enqueueTtsAudio])
 
   /* ---------- WebSocket ---------- */
   useEffect(() => {
@@ -188,11 +239,13 @@ export default function App() {
             })
 
           } else if (d.type === 'tts_start') {
-            // backend is about to send TTS audio
+            // Backend is about to stream TTS sentences — clear any leftover audio
+            stopAndClearAudio()
 
           } else if (d.type === 'tts' || d.type === 'tts_sentence') {
-            if (d.path) playTtsAudio(d.path)
-            else if (d.url) playTtsAudio(d.url)
+            // Prefer the HTTP URL; fall back to resolving the file path
+            const src = d.url || d.path
+            if (src) enqueueTtsAudio(src)
 
           } else if (d.type === 'wake_word') {
             setListening(true)
@@ -229,6 +282,11 @@ export default function App() {
               current_query: d.current_query || ''
             })
 
+          } else if (d.type === 'interrupted') {
+            stopAndClearAudio()
+            setSpeaking(false)
+            setSpeakWord('')
+
           } else if (d.type === 'done') {
             setSpeaking(false)
             setSpeakWord('')
@@ -245,12 +303,13 @@ export default function App() {
     }
     connect()
     return () => wsRef.current?.close()
-  }, [playTtsAudio])
+  }, [enqueueTtsAudio, stopAndClearAudio])
 
   const send = (text) => {
     if (!text.trim()) return
     setMsgs(m => [...m, { who: 'YOU', text }])
     setSpeaking(false)
+    stopAndClearAudio()
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'chat', text }))
     } else {
@@ -294,6 +353,7 @@ export default function App() {
       if (e.code === 'Tab') { e.preventDefault(); setShowHud(h => !h) }
       if (e.code === 'Backquote') { setShowDock(d => !d) }
       if (e.code === 'Escape') {
+        stopAndClearAudio()
         setSpeaking(false)
         setListening(false)
         wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
@@ -311,7 +371,7 @@ export default function App() {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
     }
-  }, [startPTT, stopPTT])
+  }, [startPTT, stopPTT, stopAndClearAudio])
 
   const lastMsgs = msgs.slice(-3)
 
@@ -380,9 +440,15 @@ export default function App() {
             value={input}
             onChange={e=>setInput(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter'){ send(input); setInput('') }}}
-            placeholder={listening ? 'Listening…' : 'Ask Jarvis…'}
+            placeholder="Type a command or hold Space to speak…"
+            className="cmd-input"
           />
-          <button onClick={()=>{ send(input); setInput('')}}>Send</button>
+          <button className="send-btn" onClick={()=>{ send(input); setInput('') }}>SEND</button>
+          <button
+            className={`ptt-btn ${listening ? 'active' : ''}`}
+            onMouseDown={startPTT} onMouseUp={stopPTT}
+            onTouchStart={startPTT} onTouchEnd={stopPTT}
+          >🎙</button>
         </div>
       </div>
     </>
