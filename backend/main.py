@@ -41,7 +41,7 @@ agent = JarvisAgent()
   # ── Pre-load Whisper model in background so first PTT is instant ─────────────
   def _preload_whisper():
       import os as _os
-      model_size = _os.getenv("WHISPER_MODEL", "tiny.en")
+      model_size = _os.getenv("WHISPER_MODEL", "base.en")
       try:
           _load_whisper_model(model_size)
           print(f"[JARVIS] Whisper '{model_size}' pre-loaded and ready.")
@@ -104,7 +104,7 @@ def health():
         "config": {
             "ollama_host": os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
             "ollama_model": os.getenv("OLLAMA_MODEL"),
-            "whisper_model": os.getenv("WHISPER_MODEL", "base")
+            "whisper_model": os.getenv("WHISPER_MODEL", "base.en")
         }
     }
 
