@@ -25,7 +25,7 @@ edge-tts>=6.1.9
 gTTS>=2.5.4
 kokoro-onnx>=0.4.0
 soundfile>=0.12.1
-piper-tts>=2.0.0
+piper-tts>=1.2.0
 
 scipy==1.13.1
 pywin32==306; sys_platform == "win32"
