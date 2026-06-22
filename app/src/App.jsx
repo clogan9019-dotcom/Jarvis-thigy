@@ -83,14 +83,18 @@ function useParticleSphere(canvasRef, speaking, listening, audioLevel) {
 
 /* ---------- App ---------- */
 export default function App() {
-  const canvasRef = useRef(null)
+  const canvasRef    = useRef(null)
+  const chatEndRef   = useRef(null)   // scroll anchor at bottom of chat
+  const transcriptRef = useRef(null)  // the scrollable panel itself
+  const userScrolledRef = useRef(false) // true if user scrolled up manually
+
   const [listening, setListening] = useState(false)
-  const [speaking, setSpeaking] = useState(false)
+  const [speaking, setSpeaking]   = useState(false)
   const [speakWord, setSpeakWord] = useState('')
   const [audioLevel, setAudioLevel] = useState(0.15)
 
-  const [msgs, setMsgs] = useState([{ who: 'JARVIS', text: '…' }])
-  const [input, setInput] = useState('')
+  const [msgs, setMsgs]       = useState([{ who: 'JARVIS', text: '…' }])
+  const [input, setInput]     = useState('')
   const [showHud, setShowHud] = useState(true)
   const [showDock, setShowDock] = useState(true)
 
@@ -101,10 +105,10 @@ export default function App() {
 
   const wsRef = useRef(null)
 
-  // ── Audio queue: prevents sentences from overlapping ─────────────────────
-  const audioQueueRef  = useRef([])   // pending audio URLs
-  const isPlayingRef   = useRef(false) // true while an Audio element is playing
-  const currentAudioRef = useRef(null) // the currently playing Audio element
+  // ── Audio queue ───────────────────────────────────────────────────────────
+  const audioQueueRef   = useRef([])
+  const isPlayingRef    = useRef(false)
+  const currentAudioRef = useRef(null)
 
   useParticleSphere(canvasRef, speaking, listening, audioLevel)
 
@@ -114,70 +118,61 @@ export default function App() {
     return () => clearInterval(id)
   }, [speaking])
 
-  /* ---------- Resolve a file path or URL to a full HTTP URL ---------- */
+  /* ---------- Auto-scroll: stick to bottom unless user scrolled up ---------- */
+  useEffect(() => {
+    const panel = transcriptRef.current
+    if (!panel) return
+    if (!userScrolledRef.current) {
+      panel.scrollTop = panel.scrollHeight
+    }
+  }, [msgs])
+
+  /* Track whether user manually scrolled up */
+  const handlePanelScroll = useCallback(() => {
+    const panel = transcriptRef.current
+    if (!panel) return
+    const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40
+    userScrolledRef.current = !atBottom
+  }, [])
+
+  /* ---------- Audio helpers ---------- */
   const resolveAudioUrl = useCallback((pathOrUrl) => {
     const normalized = (pathOrUrl || '').replace(/\\/g, '/')
     if (normalized.startsWith('http')) return normalized
     if (normalized.startsWith('/audio/')) return `${BACKEND}${normalized}`
-    // Full local path — extract filename only
     return `${BACKEND}/audio/${normalized.split('/').pop()}`
   }, [])
 
-  /* ---------- Play next item in the audio queue ---------- */
   const playNextInQueue = useCallback(() => {
     if (audioQueueRef.current.length === 0) {
       isPlayingRef.current = false
       currentAudioRef.current = null
       return
     }
-
     const url = audioQueueRef.current.shift()
     isPlayingRef.current = true
-
     const audio = new Audio(url)
     currentAudioRef.current = audio
-
-    audio.onended = () => {
-      currentAudioRef.current = null
-      playNextInQueue()
-    }
-
-    audio.onerror = () => {
-      console.warn('[TTS] audio error for', url)
-      currentAudioRef.current = null
-      playNextInQueue()
-    }
-
-    audio.play().catch(e => {
-      console.warn('[TTS] play failed:', e)
-      currentAudioRef.current = null
-      playNextInQueue()
-    })
+    audio.onended = () => { currentAudioRef.current = null; playNextInQueue() }
+    audio.onerror = () => { currentAudioRef.current = null; playNextInQueue() }
+    audio.play().catch(() => { currentAudioRef.current = null; playNextInQueue() })
   }, [])
 
-  /* ---------- Enqueue a TTS audio file/path ---------- */
   const enqueueTtsAudio = useCallback((pathOrUrl) => {
-    const url = resolveAudioUrl(pathOrUrl)
-    audioQueueRef.current.push(url)
-    if (!isPlayingRef.current) {
-      playNextInQueue()
-    }
+    audioQueueRef.current.push(resolveAudioUrl(pathOrUrl))
+    if (!isPlayingRef.current) playNextInQueue()
   }, [resolveAudioUrl, playNextInQueue])
 
-  /* ---------- Stop all audio and clear the queue (interrupt) ---------- */
   const stopAndClearAudio = useCallback(() => {
     audioQueueRef.current = []
     isPlayingRef.current = false
     if (currentAudioRef.current) {
-      try {
-        currentAudioRef.current.pause()
-        currentAudioRef.current.src = ''
-      } catch (_) {}
+      try { currentAudioRef.current.pause(); currentAudioRef.current.src = '' } catch (_) {}
       currentAudioRef.current = null
     }
   }, [])
 
-  /* ---------- Startup: health check + personalised greeting ---------- */
+  /* ---------- Startup ---------- */
   useEffect(() => {
     Promise.all([
       fetch(BACKEND + '/health').then(r => r.json()).catch(() => null),
@@ -187,15 +182,11 @@ export default function App() {
         setMsgs([{ who: 'JARVIS', text: '❌ Backend offline. Run: python main.py in the backend folder.' }])
         return
       }
-
       const greetText = greet?.greeting || 'Neural interface online. Always at your service.'
       setMsgs([{ who: 'JARVIS', text: greetText }])
-
       if (!health.ollama?.connected) {
         setMsgs(m => [...m, { who: 'JARVIS', text: '⚠️ Ollama not connected. Run: ollama serve' }])
       }
-
-      // Speak the greeting out loud
       if (greet?.greeting) {
         fetch(BACKEND + '/tts', {
           method: 'POST',
@@ -227,6 +218,8 @@ export default function App() {
               setSpeakWord(last)
               setTimeout(()=>setSpeakWord(''), 520)
             }
+            // reset scroll-lock so new output auto-scrolls
+            userScrolledRef.current = false
             setMsgs(m => {
               const copy = [...m]
               const lastMsg = copy[copy.length-1]
@@ -239,11 +232,9 @@ export default function App() {
             })
 
           } else if (d.type === 'tts_start') {
-            // Backend is about to stream TTS sentences — clear any leftover audio
             stopAndClearAudio()
 
           } else if (d.type === 'tts' || d.type === 'tts_sentence') {
-            // Prefer the HTTP URL; fall back to resolving the file path
             const src = d.url || d.path
             if (src) enqueueTtsAudio(src)
 
@@ -273,12 +264,9 @@ export default function App() {
 
           } else if (d.type === 'research_progress') {
             setResearch({
-              active: true,
-              topic: d.topic || 'deep research',
-              queries: d.queries || 0,
-              sources: d.sources || 0,
-              progress: d.progress || 0,
-              depth: `${d.queries || 0} / 14`,
+              active: true, topic: d.topic || 'deep research',
+              queries: d.queries || 0, sources: d.sources || 0,
+              progress: d.progress || 0, depth: `${d.queries || 0} / 14`,
               current_query: d.current_query || ''
             })
 
@@ -307,6 +295,7 @@ export default function App() {
 
   const send = (text) => {
     if (!text.trim()) return
+    userScrolledRef.current = false   // auto-scroll when user sends
     setMsgs(m => [...m, { who: 'YOU', text }])
     setSpeaking(false)
     stopAndClearAudio()
@@ -319,15 +308,12 @@ export default function App() {
         body: JSON.stringify({ message: text })
       })
         .then(r => r.json())
-        .then(j => {
-          setMsgs(m => [...m, { who: 'JARVIS', text: j.reply || '(backend offline)' }])
-          setSpeaking(false)
-        })
+        .then(j => { setMsgs(m => [...m, { who: 'JARVIS', text: j.reply || '(backend offline)' }]); setSpeaking(false) })
         .catch(() => setSpeaking(false))
     }
   }
 
-  /* ---------- Push-to-Talk: hold Space to record, release to transcribe ---------- */
+  /* ---------- Push-to-Talk ---------- */
   const startPTT = useCallback(() => {
     if (listening) return
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
@@ -347,33 +333,24 @@ export default function App() {
   useEffect(() => {
     const down = (e) => {
       if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && !e.repeat) {
-        e.preventDefault()
-        startPTT()
+        e.preventDefault(); startPTT()
       }
       if (e.code === 'Tab') { e.preventDefault(); setShowHud(h => !h) }
       if (e.code === 'Backquote') { setShowDock(d => !d) }
       if (e.code === 'Escape') {
-        stopAndClearAudio()
-        setSpeaking(false)
-        setListening(false)
+        stopAndClearAudio(); setSpeaking(false); setListening(false)
         wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
       }
     }
     const up = (e) => {
       if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
-        e.preventDefault()
-        stopPTT()
+        e.preventDefault(); stopPTT()
       }
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
-    return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-    }
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
   }, [startPTT, stopPTT, stopAndClearAudio])
-
-  const lastMsgs = msgs.slice(-3)
 
   return (
     <>
@@ -422,13 +399,23 @@ export default function App() {
           </div>
         </div>
 
-        <div className="transcript-bar" style={{opacity: showHud ? 1 : 0.35}}>
-          {lastMsgs.map((m,i)=>(
+        {/* Scrollable chat transcript — top left */}
+        <div
+          className="transcript-bar"
+          ref={transcriptRef}
+          onScroll={handlePanelScroll}
+          style={{opacity: showHud ? 1 : 0.35}}
+        >
+          <div className="spacer" />
+          {msgs.map((m, i) => (
             <div key={i} className="line">
-              <span className={`who ${m.who==='YOU'?'you':''}`}>{m.who==='YOU'?'YOU >':'JARVIS >'}</span>
+              <span className={`who ${m.who === 'YOU' ? 'you' : ''}`}>
+                {m.who === 'YOU' ? 'YOU >' : 'JARVIS >'}
+              </span>
               {m.text}
             </div>
           ))}
+          <div ref={chatEndRef} />
         </div>
 
         <div className="hint">
