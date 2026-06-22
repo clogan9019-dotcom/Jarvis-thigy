@@ -77,22 +77,29 @@ body {
 @keyframes wordIn { from { opacity:0; transform: scale(.92);} to{opacity:1; transform: scale(1);} }
 .speak-word:empty { display:none; }
 
-/* Bottom transcript */
+/* Top-left transcript */
 .transcript-bar {
   position: absolute;
-  bottom: 0; left:0; right:0;
-  padding: 22px 48px 28px;
-  background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.55) 65%, transparent 100%);
+  top: 54px;
+  left: 0;
+  width: 420px;
+  padding: 14px 20px 18px 24px;
+  background: linear-gradient(135deg, rgba(0,0,0,.72) 0%, rgba(0,4,8,.52) 100%);
+  border-right: 1px solid rgba(0,229,255,0.07);
+  border-bottom: 1px solid rgba(0,229,255,0.07);
+  border-bottom-right-radius: 14px;
   z-index: 15;
-  font-size: 12.5px;
-  line-height: 1.75;
+  font-size: 12px;
+  line-height: 1.8;
   color: #58b9c9;
-  max-height: 140px;
+  max-height: calc(100vh - 120px);
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to top, black 60%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  backdrop-filter: blur(6px);
+  transition: opacity .25s;
 }
-.transcript-bar .line { margin-bottom:4px; }
-.transcript-bar .who { color: #2e7e8d; margin-right: 8px;}
+.transcript-bar .line { margin-bottom: 5px; word-break: break-word; }
+.transcript-bar .who { color: #2e7e8d; margin-right: 8px; flex-shrink: 0; }
 .transcript-bar .you { color: #d4a85e; }
 
 /* Side status – toggleable */
