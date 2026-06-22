@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 
-def _apply_jarvis_effect(wav_path: str) -> str:
     """Post-process WAV: metallic high-freq boost + reverb for the JARVIS sound."""
     try:
         import numpy as np
@@ -134,7 +133,6 @@ def tts_to_file(text: str) -> str | None:
             voice.synthesize(text, wf)
         if out_path.exists() and out_path.stat().st_size > 0:
             print(f"[TTS] Piper (alan-GB) → {out_path.name}")
-            _apply_jarvis_effect(str(out_path))
             return str(out_path)
     except Exception as e:
         print(f"[TTS] Piper TTS failed: {e}")
@@ -178,7 +176,6 @@ def tts_to_file(text: str) -> str | None:
 
         if result.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
             print(f"[TTS] PowerShell SAPI → {out_path.name}")
-            _apply_jarvis_effect(str(out_path))
             return str(out_path)
         else:
             print(f"[TTS] PowerShell SAPI failed (rc={result.returncode}): {result.stderr[:200]}")
@@ -213,7 +210,6 @@ def tts_to_file(text: str) -> str | None:
         speaker.Speak(text)
         file_stream.Close()
         print(f"[TTS] win32com SAPI → {out_path.name}")
-        _apply_jarvis_effect(str(out_path))
         return str(out_path)
     except Exception as e:
         print(f"[TTS] win32com SAPI failed: {e}")
@@ -236,7 +232,6 @@ def tts_to_file(text: str) -> str | None:
         engine.stop()
         if out_path.exists() and out_path.stat().st_size > 0:
             print(f"[TTS] pyttsx3 → {out_path.name}")
-            _apply_jarvis_effect(str(out_path))
             return str(out_path)
         print("[TTS] pyttsx3 produced empty file")
     except Exception as e:
